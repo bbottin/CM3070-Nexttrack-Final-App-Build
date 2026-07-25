@@ -3,14 +3,14 @@
 const express = require("express");
 const router = express.Router();
 const { fetchTrackFeatures } = require("../services/reccobeats");
-const { fetchTrackMetadata } = require("../services/musicbrainz");
 const { computeScore } = require("../services/similarity");
 const { cache } = require("../cache/memoryCache");
+const { searchYouTube, getYouTubeEmbedUrl } = require("../services/youtube");
 const sampleTracks = require("../data/sampleTracks.json");
 
 /**
  * POST /api/recommend
- * Get a next track recommendation
+ * Get a next track recommendation with YouTube info
  */
 router.post("/", async (req, res) => {
   try {
@@ -109,7 +109,22 @@ router.post("/", async (req, res) => {
 
     const best = scored[0];
 
-    // 6. Build response
+    // 6. Search YouTube for the recommended track
+    let youtube = null;
+    if (best) {
+      const searchQuery = `${best.title} ${best.artist} official audio`;
+      const results = await searchYouTube(searchQuery, 1);
+      if (results && results.length > 0 && results[0].videoId) {
+        youtube = {
+          videoId: results[0].videoId,
+          embedUrl: getYouTubeEmbedUrl(results[0].videoId),
+          thumbnail: results[0].thumbnail,
+          title: results[0].title,
+        };
+      }
+    }
+
+    // 7. Build response with YouTube info
     res.json({
       track: {
         id: best.id,
@@ -118,9 +133,15 @@ router.post("/", async (req, res) => {
         album: best.album,
         genre: best.genre,
         year: best.year,
+        features: {
+          energy: best.energy,
+          valence: best.valence,
+          tempo: best.tempo,
+        },
       },
       reason: best.reason,
       score: parseFloat(best.score.toFixed(3)),
+      youtube: youtube,
       candidates_considered: scored.length,
       input_tracks: tracks.map((t) => ({
         id: t.id,

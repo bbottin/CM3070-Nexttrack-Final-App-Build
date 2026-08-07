@@ -1,8 +1,6 @@
 // src/services/reccobeats.js
 
 const axios = require("axios");
-const { extractSpotifyId, isSpotifyId } = require("./spotify");
-
 const BASE_URL = process.env.RECCOBEATS_API_URL || "https://api.reccobeats.com";
 
 /**
@@ -12,30 +10,8 @@ const BASE_URL = process.env.RECCOBEATS_API_URL || "https://api.reccobeats.com";
  */
 async function fetchTrackFeatures(trackId) {
   try {
-    // Extract clean Spotify ID if needed
-    let cleanId = trackId;
-
-    // If it's a MusicBrainz ID, we need to find the Spotify equivalent
-    if (trackId && trackId.startsWith("mbid:")) {
-      console.log(
-        `MusicBrainz ID detected: ${trackId}. This won't work with ReccoBeats.`,
-      );
-      return null;
-    }
-
-    // Try to extract Spotify ID from various formats
-    if (!isSpotifyId(trackId)) {
-      cleanId = extractSpotifyId(trackId);
-    }
-
-    if (!cleanId || cleanId === trackId) {
-      // If it's still not a Spotify ID format, try to search for it
-      console.log(
-        `ID "${trackId}" doesn't look like a Spotify ID. Attempting to search...`,
-      );
-    }
-
-    const response = await axios.get(`${BASE_URL}/track/${cleanId}/features`, {
+    // Note: ReccoBeats endpoints may vary - this follows their documentation pattern
+    const response = await axios.get(`${BASE_URL}/track/${trackId}/features`, {
       timeout: 5000,
       headers: {
         Accept: "application/json",
@@ -46,7 +22,7 @@ async function fetchTrackFeatures(trackId) {
 
     if (data && !data.error) {
       return {
-        id: cleanId,
+        id: trackId,
         title: data.title || data.name || "Unknown Title",
         artist: data.artist || data.artists?.[0] || "Unknown Artist",
         album: data.album || "Unknown Album",
@@ -68,7 +44,7 @@ async function fetchTrackFeatures(trackId) {
 }
 
 /**
- * Search for tracks by query (for ReccoBeats)
+ * Search for tracks by query (optional, for future use)
  * @param {string} query - Search query
  * @param {number} limit - Max results
  * @returns {Array} Search results

@@ -152,5 +152,33 @@
     "danceability": 0.80,
     "acousticness": 0.10,
     "popularity": 0.75
+  },
+  "spotify:track:6hIrJ88yxwqnvdvnnXHVkC": {
+      "id": "spotify:track:6hIrJ88yxwqnvdvnnXHVkC",
+      "title": "My Way",
+      "artist": "Frank Sinatra",
+      "album": "My Way",
+      "genre": "jazz",
+      "year": 1969,
+      "energy": 0.45,
+      "valence": 0.50,
+      "tempo": 140,
+      "danceability": 0.30,
+      "acousticness": 0.80,
+      "popularity": 0.85
+  },
+  "spotify:track:3HOj0jCVYNAaNr8v0I4x5k": {
+      "id": "spotify:track:3HOj0jCVYNAaNr8v0I4x5k",
+      "title": "Wake Me Up",
+      "artist": "Avicii",
+      "album": "True",
+      "genre": "electronic",
+      "year": 2013,
+      "energy": 0.75,
+      "valence": 0.65,
+      "tempo": 124,
+      "danceability": 0.70,
+      "acousticness": 0.10,
+      "popularity": 0.90
   }
 }

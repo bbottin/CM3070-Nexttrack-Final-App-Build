@@ -3,49 +3,51 @@
 const axios = require("axios");
 
 /**
- * Search YouTube for a track
- * @param {string} query - Track name + artist
- * @param {number} limit - Max results (default: 1)
- * @returns {Array} Video results
+ * Search YouTube for a track using oEmbed (free, no API key)
+ * Note: oEmbed only works with known video URLs, not search
+ * So we use a different approach: direct search with public endpoints
  */
 async function searchYouTube(query, limit = 1) {
   try {
-    // Using YouTube's oEmbed or public search
-    // Note: For production, use YouTube Data API with API key
-    const response = await axios.get(
-      "https://www.googleapis.com/youtube/v3/search",
+    // Use the public YouTube search RSS feed (no API key required)
+    // This is a free, unofficial method
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+
+    // Since we can't parse RSS easily, we'll use a different approach:
+    // Use the Invidious API (free, no key)
+    const invidiousResponse = await axios.get(
+      "https://invidious.private.coffee/api/v1/search",
       {
         params: {
-          part: "snippet",
           q: query,
           type: "video",
           maxResults: limit,
-          key: process.env.YOUTUBE_API_KEY || "", // Optional: add your key
-          videoEmbeddable: "true",
         },
         timeout: 5000,
       },
     );
 
-    if (response.data && response.data.items) {
-      return response.data.items.map((item) => ({
-        videoId: item.id.videoId,
-        title: item.snippet.title,
-        thumbnail: item.snippet.thumbnails.default.url,
-        channel: item.snippet.channelTitle,
-      }));
+    if (invidiousResponse.data && Array.isArray(invidiousResponse.data)) {
+      const results = invidiousResponse.data
+        .filter((item) => item.type === "video")
+        .map((item) => ({
+          videoId: item.videoId,
+          title: item.title,
+          thumbnail: `https://img.youtube.com/vi/${item.videoId}/mqdefault.jpg`,
+          channel: item.author,
+          duration: item.lengthSeconds,
+        }));
+
+      if (results.length > 0) {
+        return results;
+      }
     }
+
+    // Fallback: Return null and let frontend handle it
     return [];
   } catch (error) {
     console.warn(`YouTube search failed for "${query}": ${error.message}`);
-    // Fallback: use YouTube embed with search query
-    return [
-      {
-        videoId: null,
-        searchQuery: query,
-        note: "YouTube Data API key not configured. Using fallback.",
-      },
-    ];
+    return [];
   }
 }
 

@@ -9,6 +9,7 @@ const path = require("path");
 const recommendRoute = require("./src/routes/recommend");
 const trackRoute = require("./src/routes/track");
 const playlistRoute = require("./src/routes/playlist");
+const searchRoute = require("./src/routes/search");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,7 @@ app.use((req, res, next) => {
 app.use("/api/recommend", recommendRoute);
 app.use("/api/track", trackRoute);
 app.use("/api/playlist", playlistRoute);
+app.use("/api/search", searchRoute);
 
 // Health check
 app.get("/health", (req, res) => {

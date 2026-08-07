@@ -32,8 +32,11 @@ function MusicPlayer({
 
   const { track, youtube } = currentTrack;
 
-  // If no YouTube video found, show fallback
+  // If no YouTube video found, create a search URL
   if (!youtube || !youtube.videoId) {
+    const searchQuery = `${track.title} ${track.artist} official audio`;
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`;
+
     return (
       <div
         className="player-container"
@@ -41,10 +44,19 @@ function MusicPlayer({
       >
         <h3>{track.title}</h3>
         <p style={{ color: "#8888aa" }}>{track.artist}</p>
-        <p style={{ color: "#666688", fontSize: "0.9rem", marginTop: "10px" }}>
-          ⚠️ No YouTube video found for this track
+        <p style={{ color: "#ffa726", fontSize: "0.9rem", marginTop: "10px" }}>
+          ⚠️ No direct video found. Click below to search YouTube.
         </p>
-        <div className="player-controls">
+        <a
+          href={searchUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-primary"
+          style={{ marginTop: "15px" }}
+        >
+          🔍 Search on YouTube
+        </a>
+        <div className="player-controls" style={{ marginTop: "20px" }}>
           <button className="btn btn-secondary" onClick={onPrev}>
             ⏮ Prev
           </button>

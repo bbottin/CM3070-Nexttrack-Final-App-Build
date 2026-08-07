@@ -1,87 +1,86 @@
 // src/services/reccobeats.js
 
 const axios = require("axios");
-const { extractSpotifyId, isSpotifyId } = require("./spotify");
+const { getTrack, searchTracks: searchSpotify } = require("./spotify");
 
 const BASE_URL = process.env.RECCOBEATS_API_URL || "https://api.reccobeats.com";
+const USE_RECCOBEATS = process.env.USE_RECCOBEATS === "true"; // Enable if you have paid API key
 
 /**
- * Fetch audio features for a track from ReccoBeats
- * @param {string} trackId - Track ID (Spotify format)
- * @returns {Object|null} Track features or null if not found
+ * Fetch audio features for a track
+ * Tries ReccoBeats first (if enabled), then falls back to Spotify
  */
 async function fetchTrackFeatures(trackId) {
+  // Try ReccoBeats first (if you have a paid key)
+  if (USE_RECCOBEATS) {
+    try {
+      const response = await axios.get(
+        `${BASE_URL}/track/${trackId}/features`,
+        {
+          timeout: 5000,
+          headers: { Accept: "application/json" },
+        },
+      );
+
+      const data = response.data;
+      if (data && !data.error) {
+        return {
+          id: trackId,
+          title: data.title || "Unknown Title",
+          artist: data.artist || "Unknown Artist",
+          album: data.album || "Unknown Album",
+          genre: data.genre || "pop",
+          year: data.year || 2020,
+          energy: data.energy || 0.5,
+          valence: data.valence || 0.5,
+          tempo: data.tempo || 120,
+          danceability: data.danceability || 0.5,
+          acousticness: data.acousticness || 0.5,
+          popularity: data.popularity || 0.5,
+        };
+      }
+    } catch (error) {
+      console.warn(`ReccoBeats failed for ${trackId}:`, error.message);
+      // Fall through to Spotify
+    }
+  }
+
+  // Fallback to Spotify
   try {
-    // Extract clean Spotify ID if needed
-    let cleanId = trackId;
-
-    // If it's a MusicBrainz ID, we need to find the Spotify equivalent
-    if (trackId && trackId.startsWith("mbid:")) {
-      console.log(
-        `MusicBrainz ID detected: ${trackId}. This won't work with ReccoBeats.`,
-      );
-      return null;
-    }
-
-    // Try to extract Spotify ID from various formats
-    if (!isSpotifyId(trackId)) {
-      cleanId = extractSpotifyId(trackId);
-    }
-
-    if (!cleanId || cleanId === trackId) {
-      // If it's still not a Spotify ID format, try to search for it
-      console.log(
-        `ID "${trackId}" doesn't look like a Spotify ID. Attempting to search...`,
-      );
-    }
-
-    const response = await axios.get(`${BASE_URL}/track/${cleanId}/features`, {
-      timeout: 5000,
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    const data = response.data;
-
-    if (data && !data.error) {
+    const track = await getTrack(trackId);
+    if (track && track.features) {
       return {
-        id: cleanId,
-        title: data.title || data.name || "Unknown Title",
-        artist: data.artist || data.artists?.[0] || "Unknown Artist",
-        album: data.album || "Unknown Album",
-        genre: data.genre || data.genres?.[0] || "pop",
-        year: data.year || data.release_year || 2020,
-        energy: data.energy || data.energy_score || 0.5,
-        valence: data.valence || data.valence_score || 0.5,
-        tempo: data.tempo || data.bpm || 120,
-        danceability: data.danceability || data.danceability_score || 0.5,
-        acousticness: data.acousticness || data.acousticness_score || 0.5,
-        popularity: data.popularity || 0.5,
+        id: trackId,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        genre: "pop", // Spotify doesn't have genre per track
+        year: parseInt(track.year) || 2020,
+        energy: track.features.energy || 0.5,
+        valence: track.features.valence || 0.5,
+        tempo: track.features.tempo || 120,
+        danceability: track.features.danceability || 0.5,
+        acousticness: track.features.acousticness || 0.5,
+        popularity: track.popularity || 0.5,
       };
     }
     return null;
   } catch (error) {
-    console.warn(`ReccoBeats fetch failed for ${trackId}: ${error.message}`);
+    console.warn(`Spotify fallback failed for ${trackId}:`, error.message);
     return null;
   }
 }
 
 /**
- * Search for tracks by query (for ReccoBeats)
- * @param {string} query - Search query
- * @param {number} limit - Max results
- * @returns {Array} Search results
+ * Search for tracks (uses Spotify)
+ * This is the ONLY declaration of searchTracks
  */
 async function searchTracks(query, limit = 10) {
   try {
-    const response = await axios.get(`${BASE_URL}/search`, {
-      params: { q: query, limit },
-      timeout: 5000,
-    });
-    return response.data.results || [];
+    const results = await searchSpotify(query, limit);
+    return results || [];
   } catch (error) {
-    console.warn(`Search failed: ${error.message}`);
+    console.warn(`Search failed:`, error.message);
     return [];
   }
 }

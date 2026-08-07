@@ -2,16 +2,49 @@
 
 const express = require("express");
 const router = express.Router();
-const axios = require("axios");
+const { searchTracks: searchLastFm } = require("../services/lastfm");
+const { searchTracks: searchSpotify } = require("../services/spotify");
+const sampleTracks = require("../data/sampleTracks.json");
+
+/**
+ * Try to find a Spotify ID for a track using the Spotify search
+ * This helps map Last.fm results to Spotify IDs
+ */
+async function findSpotifyId(title, artist) {
+  try {
+    const query = `${title} ${artist}`;
+    const results = await searchSpotify(query, 3);
+    if (results && results.length > 0) {
+      // Find the best match (exact title match preferred)
+      const exactMatch = results.find(
+        (r) =>
+          r.title.toLowerCase() === title.toLowerCase() &&
+          r.artist.toLowerCase() === artist.toLowerCase(),
+      );
+      if (exactMatch) return exactMatch.id;
+
+      // Otherwise take the first result
+      return results[0].id;
+    }
+    return null;
+  } catch (error) {
+    console.warn(
+      `Failed to find Spotify ID for "${title} - ${artist}":`,
+      error.message,
+    );
+    return null;
+  }
+}
 
 /**
  * GET /api/search
- * Search for tracks by name/artist
- * Uses multiple sources for better results
+ * Search for tracks by name/artist using Last.fm (free)
  */
 router.get("/", async (req, res) => {
   try {
     const { q, limit = 10 } = req.query;
+
+    console.log(`🔍 Search request received for: "${q}"`);
 
     if (!q || q.trim().length < 2) {
       return res.status(400).json({
@@ -20,85 +53,108 @@ router.get("/", async (req, res) => {
       });
     }
 
-    const results = [];
+    let results = [];
+    let sources = [];
 
-    // 1. Try MusicBrainz search (free, no auth)
+    // 1. Try Last.fm first (FREE, no Premium required!)
     try {
-      const mbResponse = await axios.get(
-        "https://musicbrainz.org/ws/2/recording",
-        {
-          params: {
-            query: q,
-            fmt: "json",
-            limit: limit,
-          },
-          headers: {
-            "User-Agent":
-              "NextTrackAPI/1.0 (https://github.com/yourusername/nexttrack)",
-          },
-          timeout: 5000,
-        },
-      );
+      console.log(`🔍 Attempting Last.fm search for: "${q}"`);
+      const lastFmResults = await searchLastFm(q, limit);
 
-      if (mbResponse.data && mbResponse.data.recordings) {
-        for (const recording of mbResponse.data.recordings) {
-          const artist = recording["artist-credit"]?.[0]?.name || "Unknown";
-          const title = recording.title || "Unknown Title";
+      if (lastFmResults && lastFmResults.length > 0) {
+        let mappedCount = 0;
 
-          // Generate a Spotify-like ID from MusicBrainz ID
-          const id = `mbid:${recording.id}`;
-
-          results.push({
-            id: id,
-            title: title,
-            artist: artist,
-            album: recording.releases?.[0]?.title || "Unknown Album",
-            year: recording.releases?.[0]?.date?.split("-")[0] || "",
-            source: "MusicBrainz",
-          });
-        }
-      }
-    } catch (mbError) {
-      console.warn("MusicBrainz search failed:", mbError.message);
-    }
-
-    // 2. Try ReccoBeats search (if available)
-    try {
-      const rbResponse = await axios.get("https://api.reccobeats.com/search", {
-        params: {
-          q: q,
-          limit: limit,
-        },
-        timeout: 5000,
-      });
-
-      if (rbResponse.data && rbResponse.data.results) {
-        for (const item of rbResponse.data.results) {
+        for (const track of lastFmResults) {
           // Check if we already have this track
           const exists = results.some(
             (r) =>
-              r.title.toLowerCase() === item.title?.toLowerCase() &&
-              r.artist.toLowerCase() === item.artist?.toLowerCase(),
+              r.title.toLowerCase() === track.title.toLowerCase() &&
+              r.artist.toLowerCase() === track.artist.toLowerCase(),
           );
           if (!exists) {
-            results.push({
-              id: item.id || `recco:${item.title}`,
-              title: item.title || "Unknown",
-              artist: item.artist || "Unknown",
-              album: item.album || "Unknown Album",
-              year: item.year || "",
-              source: "ReccoBeats",
-            });
+            // Try to find a Spotify ID for this track
+            let spotifyId = null;
+            let source = "Last.fm";
+
+            // Check sample data first (fastest)
+            for (const [id, sample] of Object.entries(sampleTracks)) {
+              if (
+                sample.title.toLowerCase() === track.title.toLowerCase() &&
+                sample.artist.toLowerCase() === track.artist.toLowerCase()
+              ) {
+                spotifyId = id;
+                source = "Sample (matched)";
+                break;
+              }
+            }
+
+            // If not in sample data, try Spotify search
+            if (!spotifyId) {
+              const foundId = await findSpotifyId(track.title, track.artist);
+              if (foundId) {
+                spotifyId = foundId;
+                source = "Spotify (mapped)";
+                mappedCount++;
+              }
+            }
+
+            // If we found a Spotify ID, use it
+            if (spotifyId) {
+              // Check if this track exists in sample data to get audio features
+              let album = track.album || "Unknown";
+              let year = track.year || "";
+
+              for (const [id, sample] of Object.entries(sampleTracks)) {
+                if (
+                  id === spotifyId ||
+                  (sample.title.toLowerCase() === track.title.toLowerCase() &&
+                    sample.artist.toLowerCase() === track.artist.toLowerCase())
+                ) {
+                  album = sample.album || album;
+                  year = sample.year || year;
+                  break;
+                }
+              }
+
+              results.push({
+                id: spotifyId, // Use Spotify ID!
+                title: track.title,
+                artist: track.artist,
+                album: album,
+                year: year,
+                image: track.image,
+                source: source,
+              });
+            } else {
+              // No Spotify ID found - still add but mark it
+              results.push({
+                id: track.id, // Use Last.fm ID as fallback
+                title: track.title,
+                artist: track.artist,
+                album: track.album || "Unknown",
+                year: track.year || "",
+                image: track.image,
+                source: "Last.fm (no Spotify ID)",
+                needsMapping: true,
+              });
+            }
           }
         }
+
+        sources.push("Last.fm");
+        console.log(
+          `✅ Added ${results.length} tracks from Last.fm (${mappedCount} mapped to Spotify IDs)`,
+        );
+      } else {
+        console.log(`⚠️ Last.fm returned no results for "${q}"`);
       }
-    } catch (rbError) {
-      console.warn("ReccoBeats search failed:", rbError.message);
+    } catch (error) {
+      console.error(`❌ Last.fm search failed:`, error.message);
     }
 
-    // 3. Fallback: Use sample data for common songs
-    if (results.length === 0) {
-      const sampleTracks = require("../data/sampleTracks.json");
+    // 2. If we have few results, try sample data as well
+    if (results.length < 3) {
+      console.log(`🔍 Checking sample data for additional matches: "${q}"`);
       const searchLower = q.toLowerCase();
 
       for (const [id, track] of Object.entries(sampleTracks)) {
@@ -106,31 +162,58 @@ router.get("/", async (req, res) => {
           track.title.toLowerCase().includes(searchLower) ||
           track.artist.toLowerCase().includes(searchLower)
         ) {
-          results.push({
-            id: id,
-            title: track.title,
-            artist: track.artist,
-            album: track.album || "Unknown Album",
-            year: track.year || "",
-            source: "Sample Data",
-          });
+          const exists = results.some(
+            (r) =>
+              r.title.toLowerCase() === track.title.toLowerCase() &&
+              r.artist.toLowerCase() === track.artist.toLowerCase(),
+          );
+          if (!exists) {
+            results.push({
+              id: id,
+              title: track.title,
+              artist: track.artist,
+              album: track.album || "Unknown Album",
+              year: track.year || "",
+              image: track.image || null,
+              source: "Sample Data",
+            });
+          }
         }
         if (results.length >= limit) break;
       }
+
+      if (results.length > 0 && !sources.includes("Sample Data")) {
+        sources.push("Sample Data");
+      }
     }
+
+    // Sort results: prefer tracks with Spotify IDs
+    results.sort((a, b) => {
+      const aHasSpotify =
+        a.id && !a.id.startsWith("lastfm:") && !a.id.startsWith("lastfm");
+      const bHasSpotify =
+        b.id && !b.id.startsWith("lastfm:") && !b.id.startsWith("lastfm");
+      if (aHasSpotify && !bHasSpotify) return -1;
+      if (!aHasSpotify && bHasSpotify) return 1;
+      return 0;
+    });
+
+    console.log(
+      `📊 Final results: ${results.length} tracks from: ${sources.join(", ") || "none"}`,
+    );
 
     res.json({
       query: q,
       results: results,
       total: results.length,
-      sources: {
-        musicbrainz: results.some((r) => r.source === "MusicBrainz"),
-        reccobeats: results.some((r) => r.source === "ReccoBeats"),
-        sample: results.some((r) => r.source === "Sample Data"),
-      },
+      sources: sources,
+      message:
+        results.length === 0
+          ? "No results found. Try a different search term."
+          : null,
     });
   } catch (error) {
-    console.error("Search error:", error);
+    console.error("❌ Search route error:", error);
     res.status(500).json({
       error: "Failed to search tracks",
       details: error.message,

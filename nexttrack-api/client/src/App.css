@@ -582,3 +582,60 @@ section h2 {
   cursor: not-allowed;
   transform: none;
 }
+
+/* Player Styles */
+.player-container {
+  padding: 20px;
+}
+
+.spotify-wrapper {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.spotify-wrapper iframe {
+  width: 100%;
+  height: 152px;
+  border-radius: 12px;
+}
+
+.now-playing-info {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.player-controls {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 15px;
+  padding: 15px 0;
+  flex-wrap: wrap;
+}
+
+.player-controls .btn {
+  padding: 10px 20px;
+  min-width: 80px;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .spotify-wrapper {
+    max-width: 100%;
+  }
+
+  .spotify-wrapper iframe {
+    height: 80px;
+  }
+
+  .player-controls {
+    gap: 10px;
+  }
+
+  .player-controls .btn {
+    padding: 8px 15px;
+    min-width: 60px;
+    font-size: 0.9rem;
+  }
+}

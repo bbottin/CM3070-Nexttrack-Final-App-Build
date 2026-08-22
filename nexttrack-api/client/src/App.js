@@ -6,10 +6,8 @@ import "./App.css";
 
 // Components
 import TrackInput from "./components/TrackInput";
-import TrackCard from "./components/TrackCard";
 import Playlist from "./components/Playlist";
 import MusicPlayer from "./components/MusicPlayer";
-import RecommendationExplanation from "./components/RecommendationExplanation";
 
 const API_URL = "http://localhost:3000/api";
 
@@ -21,7 +19,7 @@ function App() {
     genre: "any",
   });
   const [playlist, setPlaylist] = useState([]);
-  const [currentTrack, setCurrentTrack] = useState(null);
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -45,6 +43,17 @@ function App() {
     checkApi();
   }, []);
 
+  // Get current track from playlist
+  const currentTrack =
+    playlist.length > 0 && currentTrackIndex < playlist.length
+      ? playlist[currentTrackIndex]
+      : null;
+
+  // Debug: Log when currentTrack changes
+  useEffect(() => {
+    console.log("🔄 Current track changed:", currentTrack);
+  }, [currentTrack]);
+
   // Generate playlist
   const generatePlaylist = async () => {
     if (seedTracks.length < 1) {
@@ -56,60 +65,98 @@ function App() {
     setError(null);
 
     try {
+      const cleanIds = seedTracks.map((t) => {
+        if (t.id && t.id.startsWith("spotify:track:")) {
+          return t.id.split(":")[2];
+        }
+        if (t.id && t.id.startsWith("lastfm:")) {
+          return t.id;
+        }
+        return t.id;
+      });
+
+      console.log("📤 Sending seed tracks:", cleanIds);
+      console.log("📤 Preferences:", preferences);
+
       const response = await axios.post(`${API_URL}/playlist`, {
-        seed_tracks: seedTracks.map((t) => t.id),
+        seed_tracks: cleanIds,
         preferences: preferences,
         playlist_length: 10,
       });
 
-      setPlaylist(response.data.playlist || []);
+      console.log("📥 Playlist response:", response.data);
 
-      // Set first track as current
-      if (response.data.playlist && response.data.playlist.length > 0) {
-        setCurrentTrack(response.data.playlist[0]);
+      const newPlaylist = response.data.playlist || [];
+
+      // Validate playlist data
+      const validPlaylist = newPlaylist.filter(
+        (item) => item && item.track && item.track.title && item.track.artist,
+      );
+
+      console.log("✅ Valid playlist:", validPlaylist);
+
+      setPlaylist(validPlaylist);
+
+      // Reset to first track - IMPORTANT: use a callback to ensure state is updated
+      if (validPlaylist.length > 0) {
+        console.log("🎵 Setting currentTrackIndex to 0");
+        console.log("🎵 First track:", validPlaylist[0]);
+        setCurrentTrackIndex(0);
+        setIsPlaying(false);
+      } else {
+        setError("No valid tracks returned. Try different seed tracks.");
       }
     } catch (err) {
+      console.error("❌ Playlist generation error:", err);
       setError(err.response?.data?.error || err.message);
     } finally {
       setLoading(false);
     }
   };
 
-  // Play a track
-  const playTrack = (track) => {
-    setCurrentTrack(track);
-    setIsPlaying(true);
+  // Play a specific track
+  const playTrack = (index) => {
+    console.log(`🎵 PlayTrack called with index: ${index}`);
+    console.log(`🎵 Playlist length: ${playlist.length}`);
+    console.log(`🎵 Track at index ${index}:`, playlist[index]);
+
+    if (index >= 0 && index < playlist.length) {
+      setCurrentTrackIndex(index);
+      setIsPlaying(true);
+      console.log(`✅ Set currentTrackIndex to ${index}`);
+    } else {
+      console.error(`❌ Invalid index: ${index}`);
+    }
   };
 
   // Play all (start from first)
   const playAll = () => {
     if (playlist.length > 0) {
-      setCurrentTrack(playlist[0]);
+      console.log("▶️ Playing all - setting index to 0");
+      setCurrentTrackIndex(0);
       setIsPlaying(true);
     }
   };
 
-  // Get next track in playlist
+  // Get next track
   const nextTrack = () => {
-    if (currentTrack && playlist.length > 0) {
-      const currentIndex = playlist.findIndex(
-        (t) => t.track.id === currentTrack.track.id,
-      );
-      if (currentIndex < playlist.length - 1) {
-        setCurrentTrack(playlist[currentIndex + 1]);
-      }
+    if (currentTrackIndex < playlist.length - 1) {
+      console.log(`⏭ Next track: ${currentTrackIndex + 1}`);
+      setCurrentTrackIndex(currentTrackIndex + 1);
+      setIsPlaying(true);
+    } else {
+      console.log("🔄 Loop back to start");
+      setCurrentTrackIndex(0);
+      setIsPlaying(true);
     }
   };
 
-  // Get previous track in playlist
+  // Get previous track
   const prevTrack = () => {
-    if (currentTrack && playlist.length > 0) {
-      const currentIndex = playlist.findIndex(
-        (t) => t.track.id === currentTrack.track.id,
-      );
-      if (currentIndex > 0) {
-        setCurrentTrack(playlist[currentIndex - 1]);
-      }
+    if (currentTrackIndex > 0) {
+      console.log(`⏮ Prev track: ${currentTrackIndex - 1}`);
+      setCurrentTrackIndex(currentTrackIndex - 1);
+      setIsPlaying(true);
     }
   };
 
@@ -207,6 +254,7 @@ function App() {
                 <MusicPlayer
                   currentTrack={currentTrack}
                   playlist={playlist}
+                  currentTrackIndex={currentTrackIndex}
                   onNext={nextTrack}
                   onPrev={prevTrack}
                   isPlaying={isPlaying}
@@ -219,7 +267,7 @@ function App() {
                 <h2>4. Your Playlist ({playlist.length} tracks)</h2>
                 <Playlist
                   playlist={playlist}
-                  currentTrack={currentTrack}
+                  currentTrackIndex={currentTrackIndex}
                   onPlayTrack={playTrack}
                   onPlayAll={playAll}
                 />

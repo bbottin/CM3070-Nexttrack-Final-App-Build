@@ -2,16 +2,19 @@
 
 const express = require("express");
 const router = express.Router();
-const axios = require("axios");
+const { searchTracksByText } = require("../services/reccobeats");
+const { searchTracks: searchLastFm } = require("../services/lastfm");
+const sampleTracks = require("../data/sampleTracks.json");
 
 /**
  * GET /api/search
- * Search for tracks by name/artist
- * Uses multiple sources for better results
+ * Search for tracks using ReccoBeats and Last.fm
  */
 router.get("/", async (req, res) => {
   try {
     const { q, limit = 10 } = req.query;
+
+    console.log(`🔍 Search request received for: "${q}"`);
 
     if (!q || q.trim().length < 2) {
       return res.status(400).json({
@@ -20,85 +23,66 @@ router.get("/", async (req, res) => {
       });
     }
 
-    const results = [];
+    let results = [];
+    let sources = [];
 
-    // 1. Try MusicBrainz search (free, no auth)
+    // 1. Try ReccoBeats search (using correct endpoint)
     try {
-      const mbResponse = await axios.get(
-        "https://musicbrainz.org/ws/2/recording",
-        {
-          params: {
-            query: q,
-            fmt: "json",
-            limit: limit,
-          },
-          headers: {
-            "User-Agent":
-              "NextTrackAPI/1.0 (https://github.com/yourusername/nexttrack)",
-          },
-          timeout: 5000,
-        },
-      );
+      console.log(`🔍 Attempting ReccoBeats search for: "${q}"`);
+      const rbResults = await searchTracksByText(q, limit);
 
-      if (mbResponse.data && mbResponse.data.recordings) {
-        for (const recording of mbResponse.data.recordings) {
-          const artist = recording["artist-credit"]?.[0]?.name || "Unknown";
-          const title = recording.title || "Unknown Title";
-
-          // Generate a Spotify-like ID from MusicBrainz ID
-          const id = `mbid:${recording.id}`;
-
-          results.push({
-            id: id,
-            title: title,
-            artist: artist,
-            album: recording.releases?.[0]?.title || "Unknown Album",
-            year: recording.releases?.[0]?.date?.split("-")[0] || "",
-            source: "MusicBrainz",
-          });
-        }
-      }
-    } catch (mbError) {
-      console.warn("MusicBrainz search failed:", mbError.message);
-    }
-
-    // 2. Try ReccoBeats search (if available)
-    try {
-      const rbResponse = await axios.get("https://api.reccobeats.com/search", {
-        params: {
-          q: q,
-          limit: limit,
-        },
-        timeout: 5000,
-      });
-
-      if (rbResponse.data && rbResponse.data.results) {
-        for (const item of rbResponse.data.results) {
-          // Check if we already have this track
+      if (rbResults && rbResults.length > 0) {
+        for (const track of rbResults) {
           const exists = results.some(
             (r) =>
-              r.title.toLowerCase() === item.title?.toLowerCase() &&
-              r.artist.toLowerCase() === item.artist?.toLowerCase(),
+              r.title.toLowerCase() === track.title.toLowerCase() &&
+              r.artist.toLowerCase() === track.artist.toLowerCase(),
           );
           if (!exists) {
             results.push({
-              id: item.id || `recco:${item.title}`,
-              title: item.title || "Unknown",
-              artist: item.artist || "Unknown",
-              album: item.album || "Unknown Album",
-              year: item.year || "",
+              ...track,
               source: "ReccoBeats",
             });
           }
         }
+        sources.push("ReccoBeats");
+        console.log(`✅ Added ${results.length} tracks from ReccoBeats`);
       }
-    } catch (rbError) {
-      console.warn("ReccoBeats search failed:", rbError.message);
+    } catch (error) {
+      console.warn(`⚠️ ReccoBeats search failed:`, error.message);
     }
 
-    // 3. Fallback: Use sample data for common songs
+    // 2. If ReccoBeats returned few results, try Last.fm
+    if (results.length < 3) {
+      try {
+        console.log(`🔍 Attempting Last.fm search for: "${q}"`);
+        const lastFmResults = await searchLastFm(q, limit);
+
+        if (lastFmResults && lastFmResults.length > 0) {
+          for (const track of lastFmResults) {
+            const exists = results.some(
+              (r) =>
+                r.title.toLowerCase() === track.title.toLowerCase() &&
+                r.artist.toLowerCase() === track.artist.toLowerCase(),
+            );
+            if (!exists) {
+              results.push({
+                ...track,
+                source: "Last.fm",
+              });
+            }
+          }
+          sources.push("Last.fm");
+          console.log(`✅ Added ${results.length} tracks from Last.fm`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Last.fm search failed:`, error.message);
+      }
+    }
+
+    // 3. If still no results, try sample data
     if (results.length === 0) {
-      const sampleTracks = require("../data/sampleTracks.json");
+      console.log(`🔍 Checking sample data for: "${q}"`);
       const searchLower = q.toLowerCase();
 
       for (const [id, track] of Object.entries(sampleTracks)) {
@@ -117,20 +101,28 @@ router.get("/", async (req, res) => {
         }
         if (results.length >= limit) break;
       }
+
+      if (results.length > 0) {
+        sources.push("Sample Data");
+      }
     }
+
+    console.log(
+      `📊 Final results: ${results.length} tracks from: ${sources.join(", ") || "none"}`,
+    );
 
     res.json({
       query: q,
       results: results,
       total: results.length,
-      sources: {
-        musicbrainz: results.some((r) => r.source === "MusicBrainz"),
-        reccobeats: results.some((r) => r.source === "ReccoBeats"),
-        sample: results.some((r) => r.source === "Sample Data"),
-      },
+      sources: sources,
+      message:
+        results.length === 0
+          ? "No results found. Try a different search term."
+          : null,
     });
   } catch (error) {
-    console.error("Search error:", error);
+    console.error("❌ Search route error:", error);
     res.status(500).json({
       error: "Failed to search tracks",
       details: error.message,

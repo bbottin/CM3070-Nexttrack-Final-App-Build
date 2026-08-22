@@ -2,13 +2,13 @@
 
 const express = require("express");
 const router = express.Router();
-const { fetchTrackFeatures } = require("../services/reccobeats");
+const { getTrackById } = require("../services/reccobeats");
 const { cache } = require("../cache/memoryCache");
 const sampleTracks = require("../data/sampleTracks.json");
 
 /**
  * GET /api/track/:id
- * Get track details by ID
+ * Get track details by ID (supports both Spotify and ReccoBeats IDs)
  */
 router.get("/:id", async (req, res) => {
   try {
@@ -19,7 +19,7 @@ router.get("/:id", async (req, res) => {
 
     if (!track) {
       // Try ReccoBeats
-      track = await fetchTrackFeatures(id);
+      track = await getTrackById(id);
       if (track) {
         cache.set(id, track);
       } else {

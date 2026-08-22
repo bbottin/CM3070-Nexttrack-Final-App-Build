@@ -2,17 +2,16 @@
 
 const express = require("express");
 const router = express.Router();
-const { fetchTrackFeatures } = require("../services/reccobeats");
-const { computeScore } = require("../services/similarity");
-const { cache } = require("../cache/memoryCache");
+const {
+  getRecommendations,
+  searchTrack,
+  extractSpotifyId,
+} = require("../services/reccobeats");
 const { searchYouTube, getYouTubeEmbedUrl } = require("../services/youtube");
 const sampleTracks = require("../data/sampleTracks.json");
 
 /**
  * Helper function to find a track in sample data by title and artist
- * @param {string} title - Track title
- * @param {string} artist - Artist name
- * @returns {Object|null} Track object or null if not found
  */
 function findTrackInSampleData(title, artist) {
   if (!title && !artist) return null;
@@ -24,24 +23,18 @@ function findTrackInSampleData(title, artist) {
     const trackTitleLower = track.title?.toLowerCase() || "";
     const trackArtistLower = track.artist?.toLowerCase() || "";
 
-    // Check if title contains the search term OR artist contains the search term
     const titleMatch = titleLower && trackTitleLower.includes(titleLower);
     const artistMatch = artistLower && trackArtistLower.includes(artistLower);
 
-    // If both title and artist are provided, require both to match
     if (titleLower && artistLower) {
       if (titleMatch && artistMatch) {
         return { ...track, id };
       }
-    }
-    // If only title is provided, match on title
-    else if (titleLower && !artistLower) {
+    } else if (titleLower && !artistLower) {
       if (titleMatch) {
         return { ...track, id };
       }
-    }
-    // If only artist is provided, match on artist
-    else if (!titleLower && artistLower) {
+    } else if (!titleLower && artistLower) {
       if (artistMatch) {
         return { ...track, id };
       }
@@ -51,14 +44,77 @@ function findTrackInSampleData(title, artist) {
 }
 
 /**
+ * Generate a playlist using sample data with proper scoring
+ */
+function generateFromSampleData(
+  seedIds,
+  preferences = {},
+  playlist_length = 10,
+) {
+  let candidates = [];
+  const seedIdsSet = new Set(seedIds);
+
+  for (const [id, track] of Object.entries(sampleTracks)) {
+    if (
+      !seedIdsSet.has(id) &&
+      !seedIdsSet.has(extractSpotifyId(id)) &&
+      !candidates.find((c) => c.id === id)
+    ) {
+      candidates.push({ ...track, id });
+    }
+  }
+
+  const scored = candidates.map((candidate) => {
+    let score = 0.5;
+
+    // Mood-based scoring (use preferences)
+    if (preferences.mood === "energetic" && candidate.energy > 0.7)
+      score += 0.3;
+    if (preferences.mood === "calm" && candidate.energy < 0.4) score += 0.3;
+    if (preferences.mood === "happy" && candidate.valence > 0.6) score += 0.3;
+    if (preferences.mood === "sad" && candidate.valence < 0.4) score += 0.3;
+
+    // Discovery factor
+    if (preferences.discovery && preferences.discovery > 0.5) {
+      score += (1 - candidate.popularity) * 0.2;
+    }
+
+    // Genre bias
+    if (
+      preferences.genre_bias &&
+      candidate.genre &&
+      candidate.genre.toLowerCase() === preferences.genre_bias.toLowerCase()
+    ) {
+      score += 0.2;
+    }
+
+    return { ...candidate, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const uniqueTracks = [];
+  const seen = new Set();
+  for (const track of scored) {
+    const key = `${track.title}|${track.artist}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueTracks.push(track);
+    }
+    if (uniqueTracks.length >= playlist_length) break;
+  }
+
+  return uniqueTracks;
+}
+
+/**
  * POST /api/playlist
- * Generate a full playlist
+ * Generate a full playlist using ReccoBeats (FREE) with sample data fallback
  */
 router.post("/", async (req, res) => {
   try {
     const { seed_tracks, preferences = {}, playlist_length = 10 } = req.body;
 
-    // Validate input
     if (!seed_tracks || !Array.isArray(seed_tracks) || seed_tracks.length < 1) {
       return res.status(400).json({
         error:
@@ -66,208 +122,169 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // 1. Fetch features for seed tracks with improved handling
-    const seedData = [];
-    const missingIds = [];
-    const mbidFallbackUsed = [];
+    console.log(`📥 Incoming seed_tracks:`, seed_tracks);
 
-    for (const id of seed_tracks) {
-      let track = cache.get(id);
+    let playlistData = [];
+    let source = "Unknown";
+    let reccobeatsIds = [];
 
-      if (!track) {
-        // Check if it's a MusicBrainz ID
-        if (id && id.startsWith("mbid:")) {
+    // STEP 1: Convert Spotify IDs → ReccoBeats IDs
+    for (const seed of seed_tracks) {
+      const cleanId = extractSpotifyId(seed);
+      if (cleanId) {
+        console.log(`🔍 Converting Spotify ID ${cleanId} to ReccoBeats ID...`);
+        const rbTrack = await searchTrack(cleanId);
+        if (rbTrack && rbTrack.reccobeatsId) {
+          reccobeatsIds.push(rbTrack.reccobeatsId);
+          console.log(`✅ Converted to ReccoBeats ID: ${rbTrack.reccobeatsId}`);
+        } else {
           console.log(
-            `MusicBrainz ID detected: ${id}. Looking for fallback in sample data...`,
+            `⚠️ Could not convert Spotify ID ${cleanId} to ReccoBeats ID`,
           );
-
-          // Try to find in sample data by the full ID
-          track = sampleTracks[id] || null;
-
-          // If not found by ID, the frontend should have sent title/artist
-          // but we can try to look for it if we have the info in the request
-          // The frontend sends the full track object, but we only have the ID here
-          // So we'll use a different approach: look for the ID in the cache keys
-
-          if (!track) {
-            // Try to find by searching sample data with the ID as a key
-            // Some MBIDs might be stored as keys in sampleTracks
-            for (const [sampleId, sampleTrack] of Object.entries(
-              sampleTracks,
-            )) {
-              if (sampleId.includes(id) || id.includes(sampleId)) {
-                track = { ...sampleTrack, id: sampleId };
-                break;
-              }
-            }
-          }
-
-          if (track) {
-            mbidFallbackUsed.push(id);
-            console.log(
-              `Found fallback for MBID ${id}: ${track.title} - ${track.artist}`,
-            );
-          }
         }
+      }
+    }
 
-        // If still no track, try to fetch from ReccoBeats
-        if (!track) {
-          track = await fetchTrackFeatures(id);
-          if (track) {
-            cache.set(id, track);
-          }
+    // STEP 2: Get recommendations using ReccoBeats IDs
+    if (reccobeatsIds.length > 0) {
+      try {
+        const recommendations = await getRecommendations(
+          reccobeatsIds,
+          playlist_length,
+          {
+            energy: preferences.energy,
+            valence: preferences.valence,
+            popularity: preferences.popularity,
+          },
+        );
+
+        if (recommendations && recommendations.length > 0) {
+          console.log(
+            `✅ ReccoBeats returned ${recommendations.length} recommendations`,
+          );
+          playlistData = recommendations.map((track) => ({
+            ...track,
+            _source: "ReccoBeats",
+            _score: 0.85,
+          }));
+          source = "ReccoBeats (free)";
         }
-
-        // If still no track, try sample data by ID
-        if (!track) {
-          track = sampleTracks[id] || null;
-          if (track) cache.set(id, track);
-        }
-
-        // If still no track and we have the original seed track object from frontend
-        // The frontend might have sent a track object with title/artist
-        // But we only get IDs, so this is a limitation
-      }
-
-      if (track) {
-        seedData.push(track);
-      } else {
-        missingIds.push(id);
+      } catch (error) {
+        console.error(
+          "❌ ReccoBeats playlist generation failed:",
+          error.message,
+        );
       }
     }
 
-    // Log fallback usage
-    if (mbidFallbackUsed.length > 0) {
-      console.log(
-        `Used sample data fallback for ${mbidFallbackUsed.length} MusicBrainz track(s)`,
-      );
-    }
-
-    if (seedData.length === 0) {
-      return res.status(404).json({
-        error:
-          "No valid seed tracks found. Please check your track IDs or use a different search source.",
-        invalid_ids: missingIds,
-        suggestion:
-          "Try searching for a song and adding it again, or use a Spotify track ID.",
-      });
-    }
-
-    // 2. Compute average features of seed tracks
-    const avgFeatures = {
-      energy:
-        seedData.reduce((s, t) => s + (t.energy || 0.5), 0) / seedData.length,
-      valence:
-        seedData.reduce((s, t) => s + (t.valence || 0.5), 0) / seedData.length,
-      tempo:
-        seedData.reduce((s, t) => s + (t.tempo || 120), 0) / seedData.length,
-      danceability:
-        seedData.reduce((s, t) => s + (t.danceability || 0.5), 0) /
-        seedData.length,
-      acousticness:
-        seedData.reduce((s, t) => s + (t.acousticness || 0.5), 0) /
-        seedData.length,
-      genre: seedData.map((t) => t.genre).filter(Boolean)[0] || "pop",
-    };
-
-    // 3. Build candidate list (exclude seed tracks)
-    let candidates = [];
-    const seedIds = new Set(seed_tracks);
-
-    // From cache (recently fetched tracks)
-    const cacheKeys = cache.stats().keys || [];
-    for (const key of cacheKeys) {
-      if (!seedIds.has(key)) {
-        const cached = cache.get(key);
-        if (cached) candidates.push(cached);
-      }
-    }
-
-    // From sample data
-    for (const [id, track] of Object.entries(sampleTracks)) {
-      if (!seedIds.has(id) && !candidates.find((c) => c.id === id)) {
-        candidates.push({ ...track, id });
-      }
-    }
-
-    // 4. Score each candidate
-    const scored = candidates.map((candidate) => {
-      const { score, reason } = computeScore(
-        candidate,
-        avgFeatures,
+    // STEP 3: Fallback to sample data if ReccoBeats didn't work
+    if (!playlistData || playlistData.length === 0) {
+      console.log("🔄 Falling back to sample data for playlist generation");
+      const sampleTracksResult = generateFromSampleData(
+        seed_tracks,
         preferences,
+        playlist_length,
       );
-      return { ...candidate, score, reason };
-    });
 
-    // 5. Sort and select top N
-    scored.sort((a, b) => b.score - a.score);
-
-    // Get unique tracks (by title + artist to avoid duplicates)
-    const uniqueTracks = [];
-    const seen = new Set();
-    for (const track of scored) {
-      const key = `${track.title}|${track.artist}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        uniqueTracks.push(track);
+      if (sampleTracksResult && sampleTracksResult.length > 0) {
+        playlistData = sampleTracksResult.map((track) => ({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || "Unknown Album",
+          genre: track.genre || "pop",
+          year: track.year || "",
+          popularity: track.popularity || 0,
+          _score: track.score || 0.5,
+          _source: "Sample Data",
+        }));
+        source = "Sample Data (fallback)";
+        console.log(
+          `✅ Generated ${playlistData.length} tracks from sample data`,
+        );
       }
-      if (uniqueTracks.length >= playlist_length) break;
     }
 
-    if (uniqueTracks.length === 0) {
+    if (!playlistData || playlistData.length === 0) {
       return res.status(404).json({
-        error: "No candidates available for playlist generation",
+        error: "No recommendations found. Try different seed tracks.",
         suggestion:
-          "Try adding more seed tracks or adjusting your preferences.",
+          "Make sure your seed tracks are valid Spotify IDs or try adding more tracks.",
       });
     }
 
-    // 6. Fetch YouTube links for each track
+    // STEP 4: Build final playlist
     const playlist = [];
-    for (const track of uniqueTracks) {
+    for (const track of playlistData) {
       let youtube = null;
       const searchQuery = `${track.title} ${track.artist} official audio`;
-      const results = await searchYouTube(searchQuery, 1);
-      if (results && results.length > 0 && results[0].videoId) {
-        youtube = {
-          videoId: results[0].videoId,
-          embedUrl: getYouTubeEmbedUrl(results[0].videoId),
-          thumbnail: results[0].thumbnail,
-          title: results[0].title,
-        };
+
+      try {
+        const results = await searchYouTube(searchQuery, 1);
+        if (results && results.length > 0 && results[0].videoId) {
+          youtube = {
+            videoId: results[0].videoId,
+            embedUrl: getYouTubeEmbedUrl(results[0].videoId),
+            thumbnail: results[0].thumbnail,
+            title: results[0].title,
+          };
+        } else if (results && results.length > 0 && results[0].searchUrl) {
+          youtube = {
+            searchUrl: results[0].searchUrl,
+            note: results[0].note,
+          };
+        }
+      } catch (youtubeError) {
+        console.warn(`⚠️ YouTube search failed for "${searchQuery}"`);
       }
+
+      let album = track.album || "Unknown Album";
+      let year = track.year || "";
+      let genre = track.genre || "pop";
+
+      const sampleMatch = findTrackInSampleData(track.title, track.artist);
+      if (sampleMatch) {
+        album = sampleMatch.album || album;
+        year = sampleMatch.year || year;
+        genre = sampleMatch.genre || genre;
+      }
+
+      // Build reason based on source and preferences
+      let reason =
+        track._source === "Sample Data"
+          ? `Based on your preferences${preferences.mood ? ` (${preferences.mood})` : ""}`
+          : `Recommended by ReccoBeats based on your seed tracks`;
 
       playlist.push({
         track: {
           id: track.id,
           title: track.title,
           artist: track.artist,
-          album: track.album,
-          genre: track.genre,
-          year: track.year,
+          album: album,
+          genre: genre,
+          year: year,
+          popularity: track.popularity || 0,
         },
-        score: track.score,
-        reason: track.reason,
+        score: track._score || 0.8,
+        reason: reason,
         youtube: youtube,
+        source: track._source || source,
       });
     }
 
     res.json({
       playlist: playlist,
       total: playlist.length,
-      seed_tracks: seedData.map((t) => `${t.title} - ${t.artist}`),
+      seed_tracks: seed_tracks,
       preferences: preferences,
-      fallback_used:
-        mbidFallbackUsed.length > 0
-          ? {
-              count: mbidFallbackUsed.length,
-              ids: mbidFallbackUsed,
-            }
-          : null,
+      source: source,
+      reccobeats_ids_used: reccobeatsIds,
+      message: playlist.some((t) => !t.youtube || !t.youtube.videoId)
+        ? "Some tracks may not have YouTube videos available"
+        : null,
     });
   } catch (error) {
-    console.error("Playlist generation error:", error);
+    console.error("❌ Playlist generation error:", error);
     res.status(500).json({
       error: "Failed to generate playlist",
       details: error.message,

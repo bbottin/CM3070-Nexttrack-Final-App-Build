@@ -5,6 +5,7 @@ const router = express.Router();
 const {
   getRecommendations,
   searchTrack,
+  searchTracksByText,
   extractSpotifyId,
 } = require("../services/reccobeats");
 const { searchYouTube, getYouTubeEmbedUrl } = require("../services/youtube");
@@ -44,7 +45,18 @@ function findTrackInSampleData(title, artist) {
 }
 
 /**
- * Generate a playlist using sample data with proper scoring
+ * Check if a string is a valid Spotify ID format
+ */
+function isValidSpotifyId(input) {
+  if (!input) return false;
+  if (input.startsWith("spotify:track:")) return true;
+  if (input.includes("open.spotify.com/track/")) return true;
+  if (/^[a-zA-Z0-9_-]{22}$/.test(input)) return true;
+  return false;
+}
+
+/**
+ * Generate a playlist using sample data with proper Spotify IDs
  */
 function generateFromSampleData(
   seedIds,
@@ -55,19 +67,20 @@ function generateFromSampleData(
   const seedIdsSet = new Set(seedIds);
 
   for (const [id, track] of Object.entries(sampleTracks)) {
-    if (
-      !seedIdsSet.has(id) &&
-      !seedIdsSet.has(extractSpotifyId(id)) &&
-      !candidates.find((c) => c.id === id)
-    ) {
-      candidates.push({ ...track, id });
-    }
+    // Skip if this track is in the seed list
+    if (seedIdsSet.has(id)) continue;
+    // Also check if the clean Spotify ID matches
+    const cleanId = extractSpotifyId(id);
+    if (seedIdsSet.has(cleanId)) continue;
+    if (candidates.find((c) => c.id === id)) continue;
+
+    candidates.push({ ...track, id });
   }
 
   const scored = candidates.map((candidate) => {
     let score = 0.5;
 
-    // Mood-based scoring (use preferences)
+    // Mood-based scoring
     if (preferences.mood === "energetic" && candidate.energy > 0.7)
       score += 0.3;
     if (preferences.mood === "calm" && candidate.energy < 0.4) score += 0.3;
@@ -76,16 +89,17 @@ function generateFromSampleData(
 
     // Discovery factor
     if (preferences.discovery && preferences.discovery > 0.5) {
-      score += (1 - candidate.popularity) * 0.2;
+      score += (1 - (candidate.popularity || 0.5)) * 0.2;
     }
 
     // Genre bias
-    if (
-      preferences.genre_bias &&
-      candidate.genre &&
-      candidate.genre.toLowerCase() === preferences.genre_bias.toLowerCase()
-    ) {
-      score += 0.2;
+    if (preferences.genre && preferences.genre !== "any") {
+      if (
+        candidate.genre &&
+        candidate.genre.toLowerCase() === preferences.genre.toLowerCase()
+      ) {
+        score += 0.2;
+      }
     }
 
     return { ...candidate, score };
@@ -93,6 +107,7 @@ function generateFromSampleData(
 
   scored.sort((a, b) => b.score - a.score);
 
+  // Return top N unique tracks
   const uniqueTracks = [];
   const seen = new Set();
   for (const track of scored) {
@@ -108,6 +123,44 @@ function generateFromSampleData(
 }
 
 /**
+ * Format a track ID for the Spotify player
+ * Ensures the ID is in the format expected by the Spotify Embed
+ */
+function formatTrackIdForPlayer(track) {
+  // Use spotifyId if available, otherwise use id
+  let spotifyId = track.spotifyId || track.id;
+
+  if (!spotifyId) return null;
+
+  // If it's already a valid Spotify URI, return as-is
+  if (spotifyId.startsWith("spotify:track:")) {
+    return spotifyId;
+  }
+
+  // If it's a Spotify URL, extract the ID
+  if (spotifyId.includes("open.spotify.com/track/")) {
+    const match = spotifyId.match(/track\/([a-zA-Z0-9_-]+)/);
+    if (match) {
+      return `spotify:track:${match[1]}`;
+    }
+  }
+
+  // If it's a clean 22-character ID, format it
+  if (/^[a-zA-Z0-9_-]{22}$/.test(spotifyId)) {
+    return `spotify:track:${spotifyId}`;
+  }
+
+  // If it's a sample data key that's not a valid Spotify ID, try to find the spotifyId property
+  if (track.spotifyId) {
+    return formatTrackIdForPlayer({ id: track.spotifyId });
+  }
+
+  // Last resort: return the original, but log a warning
+  console.warn(`⚠️ Could not format track ID for player: ${spotifyId}`);
+  return spotifyId;
+}
+
+/**
  * POST /api/playlist
  * Generate a full playlist using ReccoBeats (FREE) with sample data fallback
  */
@@ -115,6 +168,7 @@ router.post("/", async (req, res) => {
   try {
     const { seed_tracks, preferences = {}, playlist_length = 10 } = req.body;
 
+    // Validate input
     if (!seed_tracks || !Array.isArray(seed_tracks) || seed_tracks.length < 1) {
       return res.status(400).json({
         error:
@@ -128,22 +182,109 @@ router.post("/", async (req, res) => {
     let source = "Unknown";
     let reccobeatsIds = [];
 
-    // STEP 1: Convert Spotify IDs → ReccoBeats IDs
+    // STEP 1: Process each seed - handle both IDs and text searches
+    const resolvedSeeds = [];
+
     for (const seed of seed_tracks) {
-      const cleanId = extractSpotifyId(seed);
-      if (cleanId) {
+      // Check if this is a valid Spotify ID format
+      if (isValidSpotifyId(seed)) {
+        // It's a Spotify ID - try to convert to ReccoBeats ID
+        const cleanId = extractSpotifyId(seed);
         console.log(`🔍 Converting Spotify ID ${cleanId} to ReccoBeats ID...`);
+
         const rbTrack = await searchTrack(cleanId);
         if (rbTrack && rbTrack.reccobeatsId) {
           reccobeatsIds.push(rbTrack.reccobeatsId);
+          resolvedSeeds.push({
+            original: seed,
+            cleanId: cleanId,
+            reccobeatsId: rbTrack.reccobeatsId,
+            title: rbTrack.title,
+            artist: rbTrack.artist,
+            spotifyId: rbTrack.spotifyId || cleanId,
+          });
           console.log(`✅ Converted to ReccoBeats ID: ${rbTrack.reccobeatsId}`);
         } else {
-          console.log(
-            `⚠️ Could not convert Spotify ID ${cleanId} to ReccoBeats ID`,
-          );
+          // Fallback: check if this ID exists in sample data
+          const sampleMatch = sampleTracks[cleanId] || sampleTracks[seed];
+          if (sampleMatch) {
+            resolvedSeeds.push({
+              original: seed,
+              cleanId: cleanId,
+              title: sampleMatch.title,
+              artist: sampleMatch.artist,
+              spotifyId: sampleMatch.spotifyId || cleanId,
+              sampleData: sampleMatch,
+            });
+            console.log(
+              `✅ Found in sample data: ${sampleMatch.title} - ${sampleMatch.artist}`,
+            );
+          } else {
+            console.log(`⚠️ Could not resolve seed: ${seed}`);
+          }
+        }
+      } else {
+        // It's a text search query - try to search ReccoBeats
+        console.log(
+          `🔍 Text search detected: "${seed}" - searching ReccoBeats...`,
+        );
+
+        try {
+          const searchResults = await searchTracksByText(seed, 3);
+          if (searchResults && searchResults.length > 0) {
+            const firstResult = searchResults[0];
+
+            if (firstResult.id) {
+              reccobeatsIds.push(firstResult.id);
+              resolvedSeeds.push({
+                original: seed,
+                cleanId: firstResult.id,
+                reccobeatsId: firstResult.id,
+                title: firstResult.title,
+                artist: firstResult.artist,
+                spotifyId: firstResult.spotifyId || null,
+              });
+              console.log(
+                `✅ Found via text search: ${firstResult.title} - ${firstResult.artist}`,
+              );
+            }
+          } else {
+            // No ReccoBeats results - try sample data
+            console.log(
+              `⚠️ No ReccoBeats results for "${seed}", checking sample data...`,
+            );
+            let found = false;
+            for (const [id, track] of Object.entries(sampleTracks)) {
+              if (
+                track.title.toLowerCase().includes(seed.toLowerCase()) ||
+                track.artist.toLowerCase().includes(seed.toLowerCase())
+              ) {
+                resolvedSeeds.push({
+                  original: seed,
+                  cleanId: id,
+                  title: track.title,
+                  artist: track.artist,
+                  spotifyId: track.spotifyId || id,
+                  sampleData: track,
+                });
+                found = true;
+                console.log(
+                  `✅ Found in sample data: ${track.title} - ${track.artist}`,
+                );
+                break;
+              }
+            }
+            if (!found) {
+              console.log(`⚠️ Could not resolve text search: "${seed}"`);
+            }
+          }
+        } catch (error) {
+          console.error(`❌ Text search failed for "${seed}":`, error.message);
         }
       }
     }
+
+    console.log(`📊 Resolved seeds: ${resolvedSeeds.length} tracks`);
 
     // STEP 2: Get recommendations using ReccoBeats IDs
     if (reccobeatsIds.length > 0) {
@@ -180,8 +321,16 @@ router.post("/", async (req, res) => {
     // STEP 3: Fallback to sample data if ReccoBeats didn't work
     if (!playlistData || playlistData.length === 0) {
       console.log("🔄 Falling back to sample data for playlist generation");
+
+      // Use resolved seeds or original seed_tracks for the fallback
+      const seedIdsForFallback = resolvedSeeds
+        .map((s) => s.cleanId || s.original)
+        .filter(Boolean);
+      const fallbackSeeds =
+        seedIdsForFallback.length > 0 ? seedIdsForFallback : seed_tracks;
+
       const sampleTracksResult = generateFromSampleData(
-        seed_tracks,
+        fallbackSeeds,
         preferences,
         playlist_length,
       );
@@ -195,6 +344,7 @@ router.post("/", async (req, res) => {
           genre: track.genre || "pop",
           year: track.year || "",
           popularity: track.popularity || 0,
+          spotifyId: track.spotifyId || track.id,
           _score: track.score || 0.5,
           _source: "Sample Data",
         }));
@@ -213,26 +363,19 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // STEP 4: Build final playlist
+    // STEP 4: Build final playlist with properly formatted Spotify IDs
     const playlist = [];
     for (const track of playlistData) {
+      // Format the ID properly for the Spotify player
+      const formattedTrackId = formatTrackIdForPlayer(track);
+
       let youtube = null;
       const searchQuery = `${track.title} ${track.artist} official audio`;
 
       try {
         const results = await searchYouTube(searchQuery, 1);
-        if (results && results.length > 0 && results[0].videoId) {
-          youtube = {
-            videoId: results[0].videoId,
-            embedUrl: getYouTubeEmbedUrl(results[0].videoId),
-            thumbnail: results[0].thumbnail,
-            title: results[0].title,
-          };
-        } else if (results && results.length > 0 && results[0].searchUrl) {
-          youtube = {
-            searchUrl: results[0].searchUrl,
-            note: results[0].note,
-          };
+        if (results && results.length > 0) {
+          youtube = results[0];
         }
       } catch (youtubeError) {
         console.warn(`⚠️ YouTube search failed for "${searchQuery}"`);
@@ -249,24 +392,23 @@ router.post("/", async (req, res) => {
         genre = sampleMatch.genre || genre;
       }
 
-      // Build reason based on source and preferences
-      let reason =
-        track._source === "Sample Data"
-          ? `Based on your preferences${preferences.mood ? ` (${preferences.mood})` : ""}`
-          : `Recommended by ReccoBeats based on your seed tracks`;
-
       playlist.push({
         track: {
-          id: track.id,
+          id: formattedTrackId || track.id,
           title: track.title,
           artist: track.artist,
           album: album,
           genre: genre,
           year: year,
           popularity: track.popularity || 0,
+          hasSpotifyId:
+            !!formattedTrackId && formattedTrackId.startsWith("spotify:track:"),
         },
         score: track._score || 0.8,
-        reason: reason,
+        reason:
+          track._source === "Sample Data"
+            ? `Based on your preferences${preferences.mood ? ` (${preferences.mood})` : ""}`
+            : `Recommended by ReccoBeats based on your seed tracks`,
         youtube: youtube,
         source: track._source || source,
       });
@@ -276,11 +418,11 @@ router.post("/", async (req, res) => {
       playlist: playlist,
       total: playlist.length,
       seed_tracks: seed_tracks,
+      resolved_seeds: resolvedSeeds.map((s) => `${s.title} - ${s.artist}`),
       preferences: preferences,
       source: source,
-      reccobeats_ids_used: reccobeatsIds,
-      message: playlist.some((t) => !t.youtube || !t.youtube.videoId)
-        ? "Some tracks may not have YouTube videos available"
+      message: playlist.some((t) => !t.track.hasSpotifyId)
+        ? "Some tracks may not have Spotify playback available - YouTube links provided"
         : null,
     });
   } catch (error) {

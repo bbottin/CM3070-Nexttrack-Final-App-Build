@@ -17,31 +17,65 @@ body {
   padding: 20px;
 }
 
+/* ============================================
+   HEADER WITH LOGO - UPDATED SECTION
+   ============================================ */
 .App-header {
-  text-align: center;
-  padding: 30px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 30px;
+  padding: 25px 60px;
   border-bottom: 1px solid #2a2a4a;
   margin-bottom: 30px;
+  flex-wrap: wrap;
 }
 
-.App-header h1 {
-  font-size: 3rem;
+.header-logo-container {
+  flex-shrink: 0;
+}
+
+.header-logo {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+  border-radius: 12px;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.header-logo:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 20px rgba(110, 68, 255, 0.2);
+}
+
+.header-text-container {
+  text-align: left;
+  flex: 1;
+  min-width: 200px;
+}
+
+.header-text-container h1 {
+  font-size: 2.8rem;
   background: linear-gradient(135deg, #6e44ff, #ff6b6b);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  margin-bottom: 10px;
+  margin-bottom: 5px;
+  line-height: 1.2;
 }
 
-.subtitle {
+.header-text-container .subtitle {
   color: #8888aa;
   font-size: 1.1rem;
+  -webkit-text-fill-color: #8888aa;
+  margin-top: 0;
+  margin-bottom: 8px;
 }
 
 .api-status {
   display: inline-block;
   padding: 5px 15px;
   border-radius: 20px;
-  margin-top: 10px;
+  margin-top: 0;
   font-size: 0.9rem;
 }
 
@@ -55,13 +89,84 @@ body {
   color: #ff4444;
 }
 
+/* ============================================
+   HEADER ACTIONS - RESET BUTTON
+   ============================================ */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ============================================
+   SECTION HEADER WITH CLEAR BUTTON
+   ============================================ */
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.section-header h2 {
+  margin-bottom: 0;
+}
+
+/* ============================================
+   BUTTON GROUP (Generate + Reset)
+   ============================================ */
+.button-group {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.button-group .generate-btn {
+  flex: 1;
+}
+
+.button-group .btn-reset {
+  flex-shrink: 0;
+}
+
+/* ============================================
+   RESET BUTTONS
+   ============================================ */
+.btn-reset {
+  background: #2a2a4a;
+  color: #8888aa;
+  border: 1px solid #3a3a6a;
+  transition: all 0.3s ease;
+}
+
+.btn-reset:hover {
+  background: #3a1a1a;
+  color: #ff6b6b;
+  border-color: #6a2a2a;
+  transform: translateY(-2px);
+}
+
+.btn-reset-section {
+  background: transparent;
+  color: #666688;
+  border: 1px solid #2a2a4a;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  border-radius: 6px;
+}
+
+.btn-reset-section:hover {
+  background: #3a1a1a;
+  color: #ff6b6b;
+  border-color: #6a2a2a;
+}
+
 .container {
-  max-width: 1200px;
+  max-width: 1600px;
   margin: 0 auto;
 }
 
 .App-main {
-  display: flex;
   flex-direction: column;
   gap: 40px;
 }
@@ -85,7 +190,6 @@ section h2 {
 }
 
 .track-input-container {
-  display: flex;
   gap: 15px;
   margin-bottom: 15px;
 }
@@ -387,31 +491,7 @@ section h2 {
   font-style: italic;
 }
 
-/* Responsive */
-@media (max-width: 768px) {
-  .App-header h1 {
-    font-size: 2rem;
-  }
-
-  .preferences-section {
-    grid-template-columns: 1fr;
-  }
-
-  .track-input-container {
-    flex-direction: column;
-  }
-
-  .playlist-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .player-controls {
-    flex-wrap: wrap;
-  }
-}
-
 /* Search Styles */
-
 .search-section {
   margin-bottom: 15px;
 }
@@ -536,8 +616,7 @@ section h2 {
   font-size: 0.85rem;
 }
 
-/* Results */
-
+/* Result Badges */
 .result-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -619,17 +698,65 @@ section h2 {
   min-width: 80px;
 }
 
-/* Responsive */
+/* ============================================
+   RESPONSIVE - UPDATED WITH LOGO SUPPORT
+   ============================================ */
 @media (max-width: 768px) {
-  .spotify-wrapper {
-    max-width: 100%;
+  .App-header {
+    flex-direction: column;
+    text-align: center;
+    padding: 20px;
+    gap: 15px;
   }
 
-  .spotify-wrapper iframe {
-    height: 80px;
+  .header-text-container {
+    text-align: center;
+    min-width: unset;
+  }
+
+  .header-text-container h1 {
+    font-size: 2rem;
+  }
+
+  .header-logo {
+    width: 60px;
+    height: 60px;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .section-header {
+    flex-direction: column;
+    gap: 10px;
+    align-items: stretch;
+    text-align: center;
+  }
+
+  .button-group {
+    flex-direction: column;
+  }
+
+  .button-group .btn-reset {
+    width: 100%;
+  }
+
+  .preferences-section {
+    grid-template-columns: 1fr;
+  }
+
+  .track-input-container {
+    flex-direction: column;
+  }
+
+  .playlist-grid {
+    grid-template-columns: 1fr;
   }
 
   .player-controls {
+    flex-wrap: wrap;
     gap: 10px;
   }
 
@@ -637,5 +764,64 @@ section h2 {
     padding: 8px 15px;
     min-width: 60px;
     font-size: 0.9rem;
+  }
+
+  .spotify-wrapper {
+    max-width: 100%;
+  }
+
+  .spotify-wrapper iframe {
+    height: 80px;
+  }
+}
+
+@media (max-width: 480px) {
+  .App {
+    padding: 10px;
+  }
+
+  .App-header {
+    padding: 15px;
+    gap: 10px;
+  }
+
+  .header-text-container h1 {
+    font-size: 1.6rem;
+  }
+
+  .header-logo {
+    width: 50px;
+    height: 50px;
+  }
+
+  .header-text-container .subtitle {
+    font-size: 0.9rem;
+  }
+
+  .api-status {
+    font-size: 0.75rem;
+    padding: 3px 10px;
+  }
+
+  section {
+    padding: 15px;
+  }
+
+  .input-section {
+    padding: 15px;
+  }
+
+  .search-bar {
+    flex-direction: column;
+  }
+
+  .btn {
+    padding: 10px 16px;
+    font-size: 0.9rem;
+  }
+
+  .generate-btn {
+    padding: 14px;
+    font-size: 1rem;
   }
 }

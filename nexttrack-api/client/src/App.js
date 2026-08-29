@@ -9,6 +9,9 @@ import TrackInput from "./components/TrackInput";
 import Playlist from "./components/Playlist";
 import MusicPlayer from "./components/MusicPlayer";
 
+// Logo from public folder
+const logo = "/BearCodingMusic.png";
+
 const API_URL = "http://localhost:3000/api";
 
 function App() {
@@ -49,11 +52,6 @@ function App() {
       ? playlist[currentTrackIndex]
       : null;
 
-  // Debug: Log when currentTrack changes
-  useEffect(() => {
-    console.log("🔄 Current track changed:", currentTrack);
-  }, [currentTrack]);
-
   // Generate playlist
   const generatePlaylist = async () => {
     if (seedTracks.length < 1) {
@@ -88,7 +86,6 @@ function App() {
 
       const newPlaylist = response.data.playlist || [];
 
-      // Validate playlist data
       const validPlaylist = newPlaylist.filter(
         (item) => item && item.track && item.track.title && item.track.artist,
       );
@@ -97,7 +94,6 @@ function App() {
 
       setPlaylist(validPlaylist);
 
-      // Reset to first track - IMPORTANT: use a callback to ensure state is updated
       if (validPlaylist.length > 0) {
         console.log("🎵 Setting currentTrackIndex to 0");
         console.log("🎵 First track:", validPlaylist[0]);
@@ -112,6 +108,29 @@ function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ✅ RESET FUNCTION - Clears everything and reloads the page
+  const resetApp = () => {
+    // Clear all state
+    setSeedTracks([]);
+    setPreferences({
+      mood: "neutral",
+      discovery: 0.5,
+      genre: "any",
+    });
+    setPlaylist([]);
+    setCurrentTrackIndex(0);
+    setIsPlaying(false);
+    setError(null);
+    setLoading(false);
+
+    // Option 1: Reload the page completely (most thorough)
+    window.location.reload();
+
+    // Option 2: Just reset state without page reload (uncomment if you prefer)
+    // This is smoother but might not clear all component internal states
+    // window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // Play a specific track
@@ -163,19 +182,53 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>🎵 NextTrack</h1>
-        <p className="subtitle">
-          Stateless, Privacy-First Music Recommendations
-        </p>
-        <div className={`api-status status-${apiStatus}`}>
-          {apiStatus === "online" ? "✅ API Online" : "⛔ API Offline"}
+        {/* Logo on the left */}
+        <div className="header-logo-container">
+          <img src={logo} alt="Bear Coding Music" className="header-logo" />
+        </div>
+
+        {/* Text content on the right */}
+        <div className="header-text-container">
+          <h1>🎵 NextTrack</h1>
+          <p className="subtitle">
+            Stateless, Privacy-First Music Recommendations
+          </p>
+          <div className={`api-status status-${apiStatus}`}>
+            {apiStatus === "online" ? "✅ API Online" : "⛔ API Offline"}
+          </div>
+        </div>
+
+        {/* ✅ RESET BUTTON - positioned in the header */}
+        <div className="header-actions">
+          <button
+            className="btn btn-reset btn-small"
+            onClick={resetApp}
+            title="Clear everything and start over"
+          >
+            🔄 Start Over
+          </button>
         </div>
       </header>
 
       <main className="App-main">
         <div className="container">
           <section className="input-section">
-            <h2>1. Choose Your Seed Tracks</h2>
+            <div className="section-header">
+              <h2>1. Choose Your Seed Tracks</h2>
+              {/* ✅ Small reset button in the section */}
+              {seedTracks.length > 0 && (
+                <button
+                  className="btn btn-reset-section btn-small"
+                  onClick={() => {
+                    setSeedTracks([]);
+                    setError(null);
+                  }}
+                  title="Clear all seed tracks"
+                >
+                  ✕ Clear Tracks
+                </button>
+              )}
+            </div>
             <TrackInput
               seedTracks={seedTracks}
               setSeedTracks={setSeedTracks}
@@ -236,13 +289,26 @@ function App() {
               </div>
             </div>
 
-            <button
-              className="btn btn-primary generate-btn"
-              onClick={generatePlaylist}
-              disabled={loading || seedTracks.length === 0}
-            >
-              {loading ? "🎶 Generating..." : "🎵 Generate Playlist"}
-            </button>
+            <div className="button-group">
+              <button
+                className="btn btn-primary generate-btn"
+                onClick={generatePlaylist}
+                disabled={loading || seedTracks.length === 0}
+              >
+                {loading ? "🎶 Generating..." : "🎵 Generate Playlist"}
+              </button>
+
+              {/* ✅ Reset button next to Generate */}
+              {(seedTracks.length > 0 || playlist.length > 0) && (
+                <button
+                  className="btn btn-reset btn-small"
+                  onClick={resetApp}
+                  title="Start over completely"
+                >
+                  🔄 Start Over
+                </button>
+              )}
+            </div>
 
             {error && <div className="error">{error}</div>}
           </section>
@@ -250,7 +316,16 @@ function App() {
           {playlist.length > 0 && (
             <>
               <section className="player-section">
-                <h2>3. Now Playing</h2>
+                <div className="section-header">
+                  <h2>3. Now Playing</h2>
+                  <button
+                    className="btn btn-reset-section btn-small"
+                    onClick={resetApp}
+                    title="Start over"
+                  >
+                    🔄 New Search
+                  </button>
+                </div>
                 <MusicPlayer
                   currentTrack={currentTrack}
                   playlist={playlist}
@@ -264,7 +339,16 @@ function App() {
               </section>
 
               <section className="playlist-section">
-                <h2>4. Your Playlist ({playlist.length} tracks)</h2>
+                <div className="section-header">
+                  <h2>4. Your Playlist ({playlist.length} tracks)</h2>
+                  <button
+                    className="btn btn-reset-section btn-small"
+                    onClick={resetApp}
+                    title="Start over"
+                  >
+                    🔄 Start Over
+                  </button>
+                </div>
                 <Playlist
                   playlist={playlist}
                   currentTrackIndex={currentTrackIndex}

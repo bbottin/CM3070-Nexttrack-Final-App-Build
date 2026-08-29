@@ -1,6 +1,6 @@
 {
-  "spotify:track:6rqhFgbbKwnb9MLmUQDhG6": {
-    "id": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6",
+  "6rqhFgbbKwnb9MLmUQDhG6": {
+    "id": "6rqhFgbbKwnb9MLmUQDhG6",
     "title": "Bohemian Rhapsody",
     "artist": "Queen",
     "album": "A Night at the Opera",
@@ -11,10 +11,11 @@
     "tempo": 144,
     "danceability": 0.35,
     "acousticness": 0.60,
-    "popularity": 0.95
+    "popularity": 0.95,
+    "spotifyId": "spotify:track:6rqhFgbbKwnb9MLmUQDhG6"
   },
-  "spotify:track:7Mts0OfPorF4iwOomvfqn1": {
-    "id": "spotify:track:7Mts0OfPorF4iwOomvfqn1",
+  "7Mts0OfPorF4iwOomvfqn1": {
+    "id": "7Mts0OfPorF4iwOomvfqn1",
     "title": "Imagine",
     "artist": "John Lennon",
     "album": "Imagine",
@@ -25,10 +26,11 @@
     "tempo": 140,
     "danceability": 0.45,
     "acousticness": 0.85,
-    "popularity": 0.92
+    "popularity": 0.92,
+    "spotifyId": "spotify:track:7Mts0OfPorF4iwOomvfqn1"
   },
-  "spotify:track:3rUGC1wUpYfSS9zVQ4COI9": {
-    "id": "spotify:track:3rUGC1wUpYfSS9zVQ4COI9",
+  "3rUGC1wUpYfSS9zVQ4COI9": {
+    "id": "3rUGC1wUpYfSS9zVQ4COI9",
     "title": "Digital Love",
     "artist": "Daft Punk",
     "album": "Discovery",
@@ -39,10 +41,11 @@
     "tempo": 121,
     "danceability": 0.70,
     "acousticness": 0.30,
-    "popularity": 0.88
+    "popularity": 0.88,
+    "spotifyId": "spotify:track:3rUGC1wUpYfSS9zVQ4COI9"
   },
-  "spotify:track:2TpxZ7JUBn3uw46aR7qd6V": {
-    "id": "spotify:track:2TpxZ7JUBn3uw46aR7qd6V",
+  "2TpxZ7JUBn3uw46aR7qd6V": {
+    "id": "2TpxZ7JUBn3uw46aR7qd6V",
     "title": "Stairway to Heaven",
     "artist": "Led Zeppelin",
     "album": "Led Zeppelin IV",
@@ -53,10 +56,11 @@
     "tempo": 120,
     "danceability": 0.30,
     "acousticness": 0.75,
-    "popularity": 0.90
+    "popularity": 0.90,
+    "spotifyId": "spotify:track:2TpxZ7JUBn3uw46aR7qd6V"
   },
-  "spotify:track:4iV5W9uYEdYUVa79Axb7Rh": {
-    "id": "spotify:track:4iV5W9uYEdYUVa79Axb7Rh",
+  "4iV5W9uYEdYUVa79Axb7Rh": {
+    "id": "4iV5W9uYEdYUVa79Axb7Rh",
     "title": "One More Time",
     "artist": "Daft Punk",
     "album": "Discovery",
@@ -67,10 +71,11 @@
     "tempo": 123,
     "danceability": 0.85,
     "acousticness": 0.15,
-    "popularity": 0.85
+    "popularity": 0.85,
+    "spotifyId": "spotify:track:4iV5W9uYEdYUVa79Axb7Rh"
   },
-  "spotify:track:5yQn6jYuXh4l2GQToeL29p": {
-    "id": "spotify:track:5yQn6jYuXh4l2GQToeL29p",
+  "5yQn6jYuXh4l2GQToeL29p": {
+    "id": "5yQn6jYuXh4l2GQToeL29p",
     "title": "Smells Like Teen Spirit",
     "artist": "Nirvana",
     "album": "Nevermind",
@@ -81,10 +86,11 @@
     "tempo": 117,
     "danceability": 0.40,
     "acousticness": 0.10,
-    "popularity": 0.92
+    "popularity": 0.92,
+    "spotifyId": "spotify:track:5yQn6jYuXh4l2GQToeL29p"
   },
-  "spotify:track:6bPxtEf5jAKoKcCgTdV2jO": {
-    "id": "spotify:track:6bPxtEf5jAKoKcCgTdV2jO",
+  "6bPxtEf5jAKoKcCgTdV2jO": {
+    "id": "6bPxtEf5jAKoKcCgTdV2jO",
     "title": "Billie Jean",
     "artist": "Michael Jackson",
     "album": "Thriller",
@@ -95,24 +101,11 @@
     "tempo": 117,
     "danceability": 0.85,
     "acousticness": 0.20,
-    "popularity": 0.95
+    "popularity": 0.95,
+    "spotifyId": "spotify:track:6bPxtEf5jAKoKcCgTdV2jO"
   },
-  "spotify:track:2T4XJ9pHjfBO4pxYzqMKhS": {
-    "id": "spotify:track:2T4XJ9pHjfBO4pxYzqMKhS",
-    "title": "Stairway to Heaven",
-    "artist": "Led Zeppelin",
-    "album": "Led Zeppelin IV",
-    "genre": "rock",
-    "year": 1971,
-    "energy": 0.65,
-    "valence": 0.40,
-    "tempo": 120,
-    "danceability": 0.30,
-    "acousticness": 0.75,
-    "popularity": 0.90
-  },
-  "spotify:track:6H4N7nG4m7nTU0DkR8lB6J": {
-    "id": "spotify:track:6H4N7nG4m7nTU0DkR8lB6J",
+  "6H4N7nG4m7nTU0DkR8lB6J": {
+    "id": "6H4N7nG4m7nTU0DkR8lB6J",
     "title": "Nights in White Satin",
     "artist": "The Moody Blues",
     "album": "Days of Future Passed",
@@ -123,10 +116,11 @@
     "tempo": 108,
     "danceability": 0.25,
     "acousticness": 0.80,
-    "popularity": 0.70
+    "popularity": 0.70,
+    "spotifyId": "spotify:track:6H4N7nG4m7nTU0DkR8lB6J"
   },
-  "spotify:track:6aFtZ6JkWtM5ps3T9ZJZCO": {
-    "id": "spotify:track:6aFtZ6JkWtM5ps3T9ZJZCO",
+  "6aFtZ6JkWtM5ps3T9ZJZCO": {
+    "id": "6aFtZ6JkWtM5ps3T9ZJZCO",
     "title": "Every Breath You Take",
     "artist": "The Police",
     "album": "Synchronicity",
@@ -137,10 +131,11 @@
     "tempo": 117,
     "danceability": 0.60,
     "acousticness": 0.40,
-    "popularity": 0.88
+    "popularity": 0.88,
+    "spotifyId": "spotify:track:6aFtZ6JkWtM5ps3T9ZJZCO"
   },
-  "spotify:track:7F2Z5FTcKb2J3cwe5Tf59y": {
-    "id": "spotify:track:7F2Z5FTcKb2J3cwe5Tf59y",
+  "7F2Z5FTcKb2J3cwe5Tf59y": {
+    "id": "7F2Z5FTcKb2J3cwe5Tf59y",
     "title": "Around the World",
     "artist": "Daft Punk",
     "album": "Homework",
@@ -151,34 +146,7 @@
     "tempo": 124,
     "danceability": 0.80,
     "acousticness": 0.10,
-    "popularity": 0.75
-  },
-  "spotify:track:6hIrJ88yxwqnvdvnnXHVkC": {
-      "id": "spotify:track:6hIrJ88yxwqnvdvnnXHVkC",
-      "title": "My Way",
-      "artist": "Frank Sinatra",
-      "album": "My Way",
-      "genre": "jazz",
-      "year": 1969,
-      "energy": 0.45,
-      "valence": 0.50,
-      "tempo": 140,
-      "danceability": 0.30,
-      "acousticness": 0.80,
-      "popularity": 0.85
-  },
-  "spotify:track:3HOj0jCVYNAaNr8v0I4x5k": {
-      "id": "spotify:track:3HOj0jCVYNAaNr8v0I4x5k",
-      "title": "Wake Me Up",
-      "artist": "Avicii",
-      "album": "True",
-      "genre": "electronic",
-      "year": 2013,
-      "energy": 0.75,
-      "valence": 0.65,
-      "tempo": 124,
-      "danceability": 0.70,
-      "acousticness": 0.10,
-      "popularity": 0.90
+    "popularity": 0.75,
+    "spotifyId": "spotify:track:7F2Z5FTcKb2J3cwe5Tf59y"
   }
 }

@@ -42,26 +42,28 @@ function MusicPlayer({
 
   const { track, youtube } = currentTrack;
 
-  // Get the Spotify track ID (clean it)
-  const getSpotifyTrackId = (id) => {
-    if (!id) return null;
-    // If it's a Spotify URI, extract the ID
-    if (id.startsWith("spotify:track:")) {
-      return id.split(":")[2];
+  // Get the Spotify track ID from the backend's dedicated spotifyUri field.
+  // IMPORTANT: track.id is now always an internal id (ReccoBeats UUID or
+  // sample-data key) and is NEVER a playable Spotify ID - the backend was
+  // previously (and incorrectly) sometimes putting a bogus/unrelated id
+  // there, which is why the player would occasionally show a totally
+  // different song than the one in the playlist. track.spotifyUri is null
+  // whenever we don't have a confirmed real Spotify ID for this track.
+  const getSpotifyTrackId = (spotifyUri) => {
+    if (!spotifyUri) return null;
+    if (spotifyUri.startsWith("spotify:track:")) {
+      return spotifyUri.split(":")[2];
     }
-    // If it's a clean ID (22 chars, alphanumeric with possible underscores/hyphens)
-    if (/^[a-zA-Z0-9_-]{22}$/.test(id)) {
-      return id;
-    }
-    // If it's a Last.fm ID or other, try to extract
-    if (id.includes("|")) {
-      // Last.fm format: lastfm:Title|Artist - try to find in sample data
-      return null;
+    // Already a clean 22-char id
+    if (/^[a-zA-Z0-9_-]{22}$/.test(spotifyUri)) {
+      return spotifyUri;
     }
     return null;
   };
 
-  const spotifyTrackId = getSpotifyTrackId(track.id);
+  const spotifyTrackId = track.hasSpotifyId
+    ? getSpotifyTrackId(track.spotifyUri)
+    : null;
 
   console.log(`🎵 Track: ${track.title} by ${track.artist}`);
   console.log(`🎵 Track ID: ${track.id}`);

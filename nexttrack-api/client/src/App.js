@@ -63,21 +63,28 @@ function App() {
     setError(null);
 
     try {
-      const cleanIds = seedTracks.map((t) => {
-        if (t.id && t.id.startsWith("spotify:track:")) {
-          return t.id.split(":")[2];
+      // Send full seed objects (id + title + artist), not just bare id
+      // strings. Previously only the id was sent, so any seed whose id
+      // wasn't directly usable (e.g. a bare MusicBrainz UUID from Last.fm,
+      // which carries no embedded title/artist) had nothing for the backend
+      // to fall back on and silently resolved to nothing.
+      const cleanSeeds = seedTracks.map((t) => {
+        let cleanId = t.id;
+        if (cleanId && cleanId.startsWith("spotify:track:")) {
+          cleanId = cleanId.split(":")[2];
         }
-        if (t.id && t.id.startsWith("lastfm:")) {
-          return t.id;
-        }
-        return t.id;
+        return {
+          id: cleanId,
+          title: t.title,
+          artist: t.artist,
+        };
       });
 
-      console.log("📤 Sending seed tracks:", cleanIds);
+      console.log("📤 Sending seed tracks:", cleanSeeds);
       console.log("📤 Preferences:", preferences);
 
       const response = await axios.post(`${API_URL}/playlist`, {
-        seed_tracks: cleanIds,
+        seed_tracks: cleanSeeds,
         preferences: preferences,
         playlist_length: 10,
       });
@@ -297,17 +304,6 @@ function App() {
               >
                 {loading ? "🎶 Generating..." : "🎵 Generate Playlist"}
               </button>
-
-              {/* ✅ Reset button next to Generate */}
-              {(seedTracks.length > 0 || playlist.length > 0) && (
-                <button
-                  className="btn btn-reset btn-small"
-                  onClick={resetApp}
-                  title="Start over completely"
-                >
-                  🔄 Start Over
-                </button>
-              )}
             </div>
 
             {error && <div className="error">{error}</div>}
@@ -318,13 +314,6 @@ function App() {
               <section className="player-section">
                 <div className="section-header">
                   <h2>3. Now Playing</h2>
-                  <button
-                    className="btn btn-reset-section btn-small"
-                    onClick={resetApp}
-                    title="Start over"
-                  >
-                    🔄 New Search
-                  </button>
                 </div>
                 <MusicPlayer
                   currentTrack={currentTrack}
@@ -341,13 +330,6 @@ function App() {
               <section className="playlist-section">
                 <div className="section-header">
                   <h2>4. Your Playlist ({playlist.length} tracks)</h2>
-                  <button
-                    className="btn btn-reset-section btn-small"
-                    onClick={resetApp}
-                    title="Start over"
-                  >
-                    🔄 Start Over
-                  </button>
                 </div>
                 <Playlist
                   playlist={playlist}

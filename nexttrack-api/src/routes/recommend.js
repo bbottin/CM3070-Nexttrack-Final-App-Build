@@ -11,6 +11,27 @@ const { searchYouTube, getYouTubeEmbedUrl } = require("../services/youtube");
 const sampleTracks = require("../data/sampleTracks.json");
 
 /**
+ * Resolve a playable spotify:track:... URI for a recommendation, or null if
+ * we don't have a confirmed real Spotify ID for it. This endpoint used to
+ * send ReccoBeats' internal UUID (or a sample-data key) straight through as
+ * `track.id` with no validation at all, which is how the "now playing"
+ * track could end up completely unrelated to the recommendation being shown.
+ */
+function formatTrackIdForPlayer(track) {
+  const spotifyId = track.spotifyId;
+  if (!spotifyId) return null;
+  if (spotifyId.startsWith("spotify:track:")) return spotifyId;
+  if (spotifyId.includes("open.spotify.com/track/")) {
+    const match = spotifyId.match(/track\/([a-zA-Z0-9_-]+)/);
+    if (match) return `spotify:track:${match[1]}`;
+  }
+  if (/^[a-zA-Z0-9_-]{22}$/.test(spotifyId)) {
+    return `spotify:track:${spotifyId}`;
+  }
+  return null;
+}
+
+/**
  * POST /api/recommend
  * Get a next track recommendation
  */
@@ -82,6 +103,9 @@ router.post("/", async (req, res) => {
         });
 
         if (recommendations && recommendations.length > 0) {
+          // recommendations[0].spotifyId is the real Spotify ID (extracted from
+          // ReccoBeats' href) - recommendations[0].id is ReccoBeats' own UUID,
+          // which is NOT playable in the Spotify embed.
           recommendation = recommendations[0];
           source = "ReccoBeats";
           console.log(
@@ -127,6 +151,7 @@ router.post("/", async (req, res) => {
         const best = scored[0];
         recommendation = {
           id: best.id,
+          spotifyId: best.spotifyId || best.id,
           title: best.title,
           artist: best.artist,
           popularity: best.popularity || 0,
@@ -162,9 +187,15 @@ router.post("/", async (req, res) => {
     }
 
     // STEP 5: Build response with proper input_tracks objects
+    const spotifyUri = formatTrackIdForPlayer(recommendation);
     const response = {
       track: {
+        // Internal id only - do not feed this to the Spotify player.
         id: recommendation.id,
+        // The only field the player should use to load this track.
+        // null means we don't have a confirmed real Spotify ID - use `youtube` instead.
+        spotifyUri: spotifyUri,
+        hasSpotifyId: !!spotifyUri,
         title: recommendation.title,
         artist: recommendation.artist,
         album: recommendation.album || "Unknown Album",

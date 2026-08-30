@@ -5,7 +5,7 @@ const router = express.Router();
 const {
   getRecommendations,
   searchTrack,
-  searchTracksByText,
+  searchTrackByTitleAndArtist,
   extractSpotifyId,
 } = require("../services/reccobeats");
 const { searchYouTube, getYouTubeEmbedUrl } = require("../services/youtube");
@@ -42,6 +42,39 @@ function findTrackInSampleData(title, artist) {
     }
   }
   return null;
+}
+
+/**
+ * Strip a redundant leading artist name from a title, e.g. title
+ * "Nirvana - Smells Like Teen Spirit" with artist "Nirvana" -> "Smells Like
+ * Teen Spirit". Last.fm's track name field sometimes already bakes the
+ * artist into the title this way, which then poisons any search that
+ * concatenates title+artist together (the artist name effectively appears
+ * twice, drowning out the actual song title in a fuzzy text match).
+ */
+function stripRedundantArtistPrefix(title, artist) {
+  if (!title || !artist) return title;
+  const prefixPattern = new RegExp(
+    `^${artist.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[-:–—]\\s*`,
+    "i",
+  );
+  return title.replace(prefixPattern, "").trim() || title;
+}
+
+/**
+ * Strip parenthetical annotations and "feat./ft./featuring" credits from a
+ * track title, e.g. "On My Own (Feat. Darla Jade)" -> "On My Own". Search
+ * backends often match much better on the bare title than on a string with
+ * a featured-artist annotation baked in.
+ */
+function stripFeaturingText(title) {
+  if (!title) return title;
+  return title
+    .replace(/\([^)]*\)/g, "") // drop anything in parentheses
+    .replace(/\[[^\]]*\]/g, "") // drop anything in brackets
+    .replace(/\b(feat\.?|ft\.?|featuring)\b.*$/i, "") // drop trailing "feat. X" with no parens
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
@@ -151,13 +184,18 @@ function formatTrackIdForPlayer(track) {
   }
 
   // If it's a sample data key that's not a valid Spotify ID, try to find the spotifyId property
-  if (track.spotifyId) {
+  if (track.spotifyId && track.spotifyId !== spotifyId) {
     return formatTrackIdForPlayer({ id: track.spotifyId });
   }
 
-  // Last resort: return the original, but log a warning
-  console.warn(`⚠️ Could not format track ID for player: ${spotifyId}`);
-  return spotifyId;
+  // No valid Spotify ID could be derived (e.g. this is a bare ReccoBeats UUID
+  // with no matching Spotify href). Returning it anyway used to make the
+  // frontend try to play a garbage ID - which either fails silently or
+  // leaves whatever track was previously loaded still playing, making the
+  // player look "out of sync" with the playlist. Return null so callers know
+  // to fall back to YouTube instead of guessing.
+  console.warn(`⚠️ Could not resolve a playable Spotify ID for: ${spotifyId}`);
+  return null;
 }
 
 /**
@@ -185,18 +223,35 @@ router.post("/", async (req, res) => {
     // STEP 1: Process each seed - handle both IDs and text searches
     const resolvedSeeds = [];
 
-    for (const seed of seed_tracks) {
-      // Check if this is a valid Spotify ID format
-      if (isValidSpotifyId(seed)) {
-        // It's a Spotify ID - try to convert to ReccoBeats ID
-        const cleanId = extractSpotifyId(seed);
+    for (const rawSeed of seed_tracks) {
+      // Seeds can be a plain string (legacy format, or still valid for a raw
+      // Spotify ID) or an { id, title, artist } object. The object form lets
+      // us fall back to a direct title/artist search whenever the id alone
+      // can't be resolved - which matters a lot for a bare MusicBrainz UUID
+      // from Last.fm (e.g. "00c01052-9c70-3840-9106-8380124742ca"), which
+      // carries no title/artist of its own and previously had absolutely
+      // nothing for the backend to search with once ID lookup failed.
+      let seedId = rawSeed;
+      let seedTitle = null;
+      let seedArtist = null;
+      if (rawSeed && typeof rawSeed === "object") {
+        seedId = rawSeed.id;
+        seedTitle = rawSeed.title || null;
+        seedArtist = rawSeed.artist || null;
+      }
+
+      let resolved = false;
+
+      // ATTEMPT 1: valid Spotify ID -> convert to ReccoBeats ID
+      if (isValidSpotifyId(seedId)) {
+        const cleanId = extractSpotifyId(seedId);
         console.log(`🔍 Converting Spotify ID ${cleanId} to ReccoBeats ID...`);
 
         const rbTrack = await searchTrack(cleanId);
         if (rbTrack && rbTrack.reccobeatsId) {
           reccobeatsIds.push(rbTrack.reccobeatsId);
           resolvedSeeds.push({
-            original: seed,
+            original: seedId,
             cleanId: cleanId,
             reccobeatsId: rbTrack.reccobeatsId,
             title: rbTrack.title,
@@ -204,12 +259,12 @@ router.post("/", async (req, res) => {
             spotifyId: rbTrack.spotifyId || cleanId,
           });
           console.log(`✅ Converted to ReccoBeats ID: ${rbTrack.reccobeatsId}`);
+          resolved = true;
         } else {
-          // Fallback: check if this ID exists in sample data
-          const sampleMatch = sampleTracks[cleanId] || sampleTracks[seed];
+          const sampleMatch = sampleTracks[cleanId] || sampleTracks[seedId];
           if (sampleMatch) {
             resolvedSeeds.push({
-              original: seed,
+              original: seedId,
               cleanId: cleanId,
               title: sampleMatch.title,
               artist: sampleMatch.artist,
@@ -219,68 +274,124 @@ router.post("/", async (req, res) => {
             console.log(
               `✅ Found in sample data: ${sampleMatch.title} - ${sampleMatch.artist}`,
             );
-          } else {
-            console.log(`⚠️ Could not resolve seed: ${seed}`);
+            resolved = true;
           }
         }
-      } else {
-        // It's a text search query - try to search ReccoBeats
+      } else if (typeof seedId === "string" && seedId.startsWith("lastfm:")) {
+        // Last.fm seed in the "lastfm:Title|Artist" format (used whenever
+        // the Last.fm result had no MBID). Parse the embedded title/artist
+        // out rather than passing the raw prefixed/piped string as free text.
+        const payload = seedId.slice("lastfm:".length);
+        const pipeIndex = payload.indexOf("|");
+        if (pipeIndex !== -1) {
+          seedTitle = seedTitle || payload.slice(0, pipeIndex);
+          seedArtist = seedArtist || payload.slice(pipeIndex + 1);
+        }
+        // Falls through to ATTEMPT 2 below using the parsed title/artist.
+      }
+
+      // ATTEMPT 2: title/artist search - covers plain free-text seeds, a
+      // parsed "lastfm:Title|Artist" seed, or a bare id (Spotify or MBID)
+      // that failed to resolve above but arrived with title/artist attached.
+      if (!resolved && (seedTitle || seedArtist)) {
+        // Last.fm's title field sometimes already contains the artist name
+        // as a prefix (e.g. "Nirvana - Smells Like Teen Spirit"), which
+        // poisons a combined search - strip that out before searching.
+        const cleanTitle =
+          stripRedundantArtistPrefix(seedTitle, seedArtist) || seedTitle;
+
         console.log(
-          `🔍 Text search detected: "${seed}" - searching ReccoBeats...`,
+          `🔍 Searching by title/artist: title="${cleanTitle}" artist="${seedArtist}" (seed id was "${seedId}")`,
         );
 
         try {
-          const searchResults = await searchTracksByText(seed, 3);
-          if (searchResults && searchResults.length > 0) {
-            const firstResult = searchResults[0];
+          // Search by title alone and validate the artist matches, rather
+          // than concatenating title+artist into one fuzzy query and
+          // blindly trusting the first result - that let a wrong artist
+          // ("Michael Pan" for a Nirvana search) through even when the
+          // combined query DID return something.
+          let bestMatch = await searchTrackByTitleAndArtist(
+            cleanTitle,
+            seedArtist,
+            5,
+          );
 
-            if (firstResult.id) {
-              reccobeatsIds.push(firstResult.id);
-              resolvedSeeds.push({
-                original: seed,
-                cleanId: firstResult.id,
-                reccobeatsId: firstResult.id,
-                title: firstResult.title,
-                artist: firstResult.artist,
-                spotifyId: firstResult.spotifyId || null,
-              });
+          // If nothing came back at all, retry once with any "(feat. X)"
+          // annotation stripped out too - e.g.
+          // "On My Own (Feat. Darla Jade)" -> "On My Own".
+          if (!bestMatch) {
+            const strippedTitle = stripFeaturingText(cleanTitle);
+            if (strippedTitle && strippedTitle !== cleanTitle) {
               console.log(
-                `✅ Found via text search: ${firstResult.title} - ${firstResult.artist}`,
+                `🔍 No match for "${cleanTitle}" - retrying with featuring text stripped: "${strippedTitle}"`,
+              );
+              bestMatch = await searchTrackByTitleAndArtist(
+                strippedTitle,
+                seedArtist,
+                5,
               );
             }
-          } else {
-            // No ReccoBeats results - try sample data
+          }
+
+          if (bestMatch && bestMatch.id) {
+            reccobeatsIds.push(bestMatch.id);
+            resolvedSeeds.push({
+              original: seedId,
+              cleanId: bestMatch.id,
+              reccobeatsId: bestMatch.id,
+              title: bestMatch.title,
+              artist: bestMatch.artist,
+              spotifyId: bestMatch.spotifyId || null,
+            });
             console.log(
-              `⚠️ No ReccoBeats results for "${seed}", checking sample data...`,
+              `✅ Found via text search: ${bestMatch.title} - ${bestMatch.artist}`,
             );
-            let found = false;
+            resolved = true;
+          }
+
+          if (!resolved) {
+            // No ReccoBeats results - try sample data, matching against the
+            // cleaned title/artist, never a raw id string.
+            console.log(
+              `⚠️ No ReccoBeats results for "${cleanTitle}" / "${seedArtist}", checking sample data...`,
+            );
+            const searchLower = [cleanTitle, seedArtist]
+              .filter(Boolean)
+              .join(" ")
+              .toLowerCase();
             for (const [id, track] of Object.entries(sampleTracks)) {
               if (
-                track.title.toLowerCase().includes(seed.toLowerCase()) ||
-                track.artist.toLowerCase().includes(seed.toLowerCase())
+                track.title.toLowerCase().includes(searchLower) ||
+                track.artist.toLowerCase().includes(searchLower) ||
+                searchLower.includes(track.title.toLowerCase()) ||
+                searchLower.includes(track.artist.toLowerCase())
               ) {
                 resolvedSeeds.push({
-                  original: seed,
+                  original: seedId,
                   cleanId: id,
                   title: track.title,
                   artist: track.artist,
                   spotifyId: track.spotifyId || id,
                   sampleData: track,
                 });
-                found = true;
                 console.log(
                   `✅ Found in sample data: ${track.title} - ${track.artist}`,
                 );
+                resolved = true;
                 break;
               }
             }
-            if (!found) {
-              console.log(`⚠️ Could not resolve text search: "${seed}"`);
-            }
           }
         } catch (error) {
-          console.error(`❌ Text search failed for "${seed}":`, error.message);
+          console.error(
+            `❌ Text search failed for "${cleanTitle}" / "${seedArtist}":`,
+            error.message,
+          );
         }
+      }
+
+      if (!resolved) {
+        console.log(`⚠️ Could not resolve seed: ${JSON.stringify(rawSeed)}`);
       }
     }
 
@@ -322,12 +433,19 @@ router.post("/", async (req, res) => {
     if (!playlistData || playlistData.length === 0) {
       console.log("🔄 Falling back to sample data for playlist generation");
 
-      // Use resolved seeds or original seed_tracks for the fallback
+      // Use resolved seeds or original seed_tracks for the fallback.
+      // seed_tracks may now contain {id, title, artist} objects rather than
+      // plain strings, so normalize to plain id strings here - otherwise an
+      // object would never match sample data keys and the seed track could
+      // leak into its own recommendations.
       const seedIdsForFallback = resolvedSeeds
         .map((s) => s.cleanId || s.original)
         .filter(Boolean);
+      const rawFallbackIds = seed_tracks
+        .map((s) => (s && typeof s === "object" ? s.id : s))
+        .filter(Boolean);
       const fallbackSeeds =
-        seedIdsForFallback.length > 0 ? seedIdsForFallback : seed_tracks;
+        seedIdsForFallback.length > 0 ? seedIdsForFallback : rawFallbackIds;
 
       const sampleTracksResult = generateFromSampleData(
         fallbackSeeds,
@@ -394,15 +512,23 @@ router.post("/", async (req, res) => {
 
       playlist.push({
         track: {
-          id: formattedTrackId || track.id,
+          // Internal id (ReccoBeats id / sample-data key) - for reference/lookup only,
+          // NEVER pass this to the Spotify player.
+          id: track.id,
+          // The only field that should ever be used to load the Spotify embed.
+          // null when we couldn't confirm a real Spotify ID for this track -
+          // the frontend must fall back to `youtube` in that case instead of
+          // guessing with `id`, which is what previously caused the player to
+          // load (or silently fail on, leaving a stale track playing) a track
+          // unrelated to the one shown in the playlist.
+          spotifyUri: formattedTrackId || null,
           title: track.title,
           artist: track.artist,
           album: album,
           genre: genre,
           year: year,
           popularity: track.popularity || 0,
-          hasSpotifyId:
-            !!formattedTrackId && formattedTrackId.startsWith("spotify:track:"),
+          hasSpotifyId: !!formattedTrackId,
         },
         score: track._score || 0.8,
         reason:

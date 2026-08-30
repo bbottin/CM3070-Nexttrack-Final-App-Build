@@ -2,7 +2,7 @@
 
 const express = require("express");
 const router = express.Router();
-const { searchTracksByText } = require("../services/reccobeats");
+const { searchTracksByTextSmart } = require("../services/reccobeats");
 const { searchTracks: searchLastFm } = require("../services/lastfm");
 const sampleTracks = require("../data/sampleTracks.json");
 
@@ -29,7 +29,7 @@ router.get("/", async (req, res) => {
     // 1. Try ReccoBeats search (using correct endpoint)
     try {
       console.log(`🔍 Attempting ReccoBeats search for: "${q}"`);
-      const rbResults = await searchTracksByText(q, limit);
+      const rbResults = await searchTracksByTextSmart(q, limit);
 
       if (rbResults && rbResults.length > 0) {
         for (const track of rbResults) {

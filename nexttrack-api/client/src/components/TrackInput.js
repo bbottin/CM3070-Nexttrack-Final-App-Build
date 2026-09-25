@@ -1,12 +1,30 @@
 // client/src/components/TrackInput.js
 
+// Import React and the useState hook (for local component state).
+// useEffect is imported but not currently used; it may be needed for
+// future side effects such as auto-focusing the input on mount.
 import React, { useState, useEffect } from "react";
+// Import axios for making HTTP requests to the NextTrack backend.
 import axios from "axios";
 
+// Base URL for all backend API calls. In development this points to
+// the local Express server running on port 3000.
 const API_URL = "http://localhost:3000/api";
 
-// Sample data for matching - this should match your backend sampleTracks.json
-// We keep a subset here for frontend matching
+// ---------------------------------------------------------------------------
+// SAMPLE_TRACKS
+// A hard-coded, frontend-only subset of the backend's sampleTracks.json.
+//
+// WHY THIS EXISTS:
+// The backend can return tracks whose IDs are not real Spotify IDs (e.g.,
+// MusicBrainz "mbid:" IDs or ReccoBeats UUIDs). When that happens, the
+// playlist generated from those seed tracks may fail because ReccoBeats
+// requires genuine Spotify IDs to look up audio features.
+//
+// This map lets the frontend recognise well-known sample tracks and swap
+// in their canonical Spotify IDs before sending them to the backend. Only
+// title and artist are kept here — the audio features live on the backend.
+// ---------------------------------------------------------------------------
 const SAMPLE_TRACKS = {
   "spotify:track:6rqhFgbbKwnb9MLmUQDhG6": {
     title: "Bohemian Rhapsody",
@@ -50,17 +68,54 @@ const SAMPLE_TRACKS = {
   },
 };
 
+/**
+ * TrackInput component
+ * ------------------------------------------------------------
+ * This component handles the "search and select seed tracks"
+ * stage of the NextTrack user flow. It lets the user:
+ *   1. Search for tracks by song name / artist.
+ *   2. Add search results to the seed track list.
+ *   3. Paste a Spotify track ID directly.
+ *   4. Remove individual seed tracks.
+ *
+ * It is a "controlled" component: the actual list of seed tracks
+ * lives in the parent (App.js) and is passed in via props. This
+ * component only renders the UI and calls `setSeedTracks` to
+ * propose changes.
+ *
+ * Props:
+ *  - seedTracks:    Array of seed track objects
+ *                   (shape: { id, title, artist, source? })
+ *  - setSeedTracks: Setter provided by the parent for updating
+ *                   the seed tracks array.
+ *  - apiStatus:     String, either "online" or "offline". Used to
+ *                   disable search while the backend is unreachable.
+ */
 function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
+  // ---- Local component state ----
+
+  // The current text in the search box.
   const [searchQuery, setSearchQuery] = useState("");
+  // The list of tracks returned by the last search, after any
+  // frontend-side normalization (see searchTracks below).
   const [searchResults, setSearchResults] = useState([]);
+  // True while a search request is in flight — drives the
+  // "Searching..." spinner.
   const [isSearching, setIsSearching] = useState(false);
+  // True once a search has been initiated, so the results panel
+  // is visible. Used together with searchResults.length.
   const [showResults, setShowResults] = useState(false);
 
   /**
-   * Find a track in sample data by title and artist
-   * @param {string} title - Track title
-   * @param {string} artist - Artist name
-   * @returns {Object|null} Track object with id, title, artist or null
+   * findSampleTrack
+   * ------------------------------------------------------------
+   * Attempts to find a matching entry in SAMPLE_TRACKS using the
+   * given title and/or artist. Matching is case-insensitive and
+   * substring-based (e.g., "bohemian" matches "Bohemian Rhapsody").
+   *
+   * @param {string} title  - Track title (may be empty).
+   * @param {string} artist - Artist name (may be empty).
+   * @returns {Object|null} { id, title, artist } on match, else null.
    */
   const findSampleTrack = (title, artist) => {
     if (!title && !artist) return null;
@@ -72,23 +127,24 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       const trackTitleLower = track.title?.toLowerCase() || "";
       const trackArtistLower = track.artist?.toLowerCase() || "";
 
-      // Check if title contains the search term OR artist contains the search term
+      // Substring matches (not exact) — this is deliberately lenient
+      // so that minor formatting differences still match.
       const titleMatch = titleLower && trackTitleLower.includes(titleLower);
       const artistMatch = artistLower && trackArtistLower.includes(artistLower);
 
-      // If both title and artist are provided, require both to match
+      // If both title and artist were given, require both to match.
       if (titleLower && artistLower) {
         if (titleMatch && artistMatch) {
           return { id, title: track.title, artist: track.artist };
         }
       }
-      // If only title is provided, match on title
+      // If only title was given, match on title.
       else if (titleLower && !artistLower) {
         if (titleMatch) {
           return { id, title: track.title, artist: track.artist };
         }
       }
-      // If only artist is provided, match on artist
+      // If only artist was given, match on artist.
       else if (!titleLower && artistLower) {
         if (artistMatch) {
           return { id, title: track.title, artist: track.artist };
@@ -98,8 +154,20 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
     return null;
   };
 
-  // Search for tracks
+  /**
+   * searchTracks
+   * ------------------------------------------------------------
+   * Queries the backend's /api/search endpoint and processes the
+   * results for display. As part of processing:
+   *   - If a result has a MusicBrainz "mbid:" ID, the app tries to find
+   *     its canonical Spotify ID in SAMPLE_TRACKS. If found, the
+   *     Spotify ID gets swappd in and mark the result as "matched".
+   *   - If no match is found, it gets flagged with `needsSpotifyId`
+   *     so the UI can warn the user that it may not work.
+   */
   const searchTracks = async () => {
+    // Ignore trivial queries — anything under 2 characters is likely
+    // to return too many results and is probably a typo in progress.
     if (!searchQuery.trim() || searchQuery.trim().length < 2) {
       return;
     }
@@ -116,9 +184,11 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       });
 
       if (response.data && response.data.results) {
-        // Convert results to have usable IDs
+        // Normalize each result so the UI can rely on consistent
+        // fields (id, source, matched, needsSpotifyId).
         const results = response.data.results.map((track) => {
-          // If it's a MusicBrainz ID, try to find a matching Spotify ID
+          // Case: the backend returned a MusicBrainz-style ID.
+          // Try to find its Spotify equivalent in our sample map.
           if (track.id && track.id.startsWith("mbid:")) {
             const sampleMatch = findSampleTrack(track.title, track.artist);
             if (sampleMatch) {
@@ -129,7 +199,9 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
                 matched: true,
               };
             }
-            // Keep as is - the backend will try to handle it
+            // No sample match — mark it as potentially unusable.
+            // The backend may still try to resolve it, but warns
+            // the user in the UI.
             return {
               ...track,
               source: `${track.source} (may not work)`,
@@ -144,6 +216,8 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
         setSearchResults([]);
       }
     } catch (error) {
+      // On network / server errors, clear the results so the UI
+      // shows the "no results" state rather than a broken list.
       console.error("Search error:", error);
       setSearchResults([]);
     } finally {
@@ -151,9 +225,15 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
     }
   };
 
-  // Add a track from search results
+  /**
+   * addTrackFromSearch
+   * ------------------------------------------------------------
+   * Adds a track from the search results panel to the seed track
+   * list. Guards against duplicates, and warns the user if the
+   * track is unlikely to work (no confirmed Spotify ID).
+   */
   const addTrackFromSearch = (track) => {
-    // Check if track already added
+    // Duplicate check by ID or by title+artist pair.
     if (
       seedTracks.some(
         (t) =>
@@ -165,7 +245,7 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       return;
     }
 
-    // If the track has a warning about needing a Spotify ID, show a message
+    // Warn the user if the track has no reliable Spotify ID.
     if (track.needsSpotifyId) {
       alert(
         "⚠️ This track is from MusicBrainz and may not work for generating recommendations.\n\n" +
@@ -173,6 +253,8 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       );
     }
 
+    // Append to the seed track list. Preserving the `source` so
+    // the UI can display where the track came from.
     setSeedTracks([
       ...seedTracks,
       {
@@ -183,37 +265,49 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       },
     ]);
 
+    // Clear the search state so the panel closes and the user can
+    // start a new search.
     setSearchResults([]);
     setSearchQuery("");
     setShowResults(false);
   };
 
-  // Remove a track
+  // Removes a seed track by its ID. Called from the ✕ on each tag.
   const removeTrack = (id) => {
     setSeedTracks(seedTracks.filter((t) => t.id !== id));
   };
 
-  // Handle search on Enter key
+  // Allows pressing Enter in the search box to trigger a search,
+  // matching typical search-bar behaviour.
   const handleKeyPress = (e) => {
     if (e.key === "Enter") {
       searchTracks();
     }
   };
 
-  // Handle manual track ID input
+  /**
+   * addManualTrack
+   * ------------------------------------------------------------
+   * Handles the "Search / Add" button. If the input looks like a
+   * Spotify track ID (either a full URI or a 22-character base62
+   * string), it is added directly as a seed track. Otherwise, the
+   * input is treated as a search query.
+   */
   const addManualTrack = () => {
     const trimmed = searchQuery.trim();
     if (!trimmed) return;
 
-    // Check if it looks like a Spotify ID
+    // Heuristic: does this look like a Spotify ID?
     if (trimmed.includes("spotify:track:") || trimmed.length === 22) {
-      // It's a track ID
+      // Duplicate guard for manual IDs.
       if (seedTracks.some((t) => t.id === trimmed)) {
         alert("Track already added");
         return;
       }
 
-      // Try to find the track in sample data to get title/artist
+      // Try to enrich the ID with title/artist by looking it up
+      // in SAMPLE_TRACKS. If not found, it falls back to using the
+      // ID itself as the title and "Unknown" as the artist.
       let title = trimmed;
       let artist = "Unknown";
 
@@ -235,13 +329,17 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
       ]);
       setSearchQuery("");
     } else {
-      // Search instead
+      // It's not an ID — treat the input as a search query.
       searchTracks();
     }
   };
 
+  // ---------------------------------------------------------------------
+  // Render
+  // ---------------------------------------------------------------------
   return (
     <div className="track-input-container">
+      {/* ---- Search bar ---- */}
       <div className="search-section">
         <div className="search-bar">
           <input
@@ -250,12 +348,14 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder="Search for a song (e.g., Bohemian Rhapsody Queen)..."
+            // Search is disabled when the backend is unreachable.
             disabled={apiStatus === "offline"}
             className="track-input"
           />
           <button
             className="btn btn-primary btn-small"
             onClick={addManualTrack}
+            // Button is disabled for empty input or offline backend.
             disabled={!searchQuery.trim() || apiStatus === "offline"}
           >
             🔍 Search / Add
@@ -266,11 +366,15 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
         </div>
       </div>
 
-      {/* Search Results */}
+      {/* ---- Search results panel ---- */}
+      {/* Only shown once a search has been triggered. It has three
+          possible states: loading, empty or populated. */}
       {showResults && (
         <div className="search-results">
+          {/* State 1: search in progress. */}
           {isSearching && <div className="search-loading">🔍 Searching...</div>}
 
+          {/* State 2: search completed but returned nothing. */}
           {!isSearching && searchResults.length === 0 && searchQuery && (
             <div className="search-no-results">
               No results found. Try a different search term or paste a Spotify
@@ -283,6 +387,7 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
             </div>
           )}
 
+          {/* State 3: search returned results. */}
           {!isSearching && searchResults.length > 0 && (
             <div className="results-list">
               <div className="results-header">
@@ -294,6 +399,8 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
                   ✕ Close
                 </button>
               </div>
+
+              {/* Map each result into a clickable row. */}
               {searchResults.map((track, index) => (
                 <div key={track.id + index} className="result-item">
                   <div className="result-info">
@@ -305,16 +412,27 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
                     {track.year && (
                       <span className="result-year">({track.year})</span>
                     )}
+                    {/* Show the track's provenance (Spotify, Last.fm, etc.) */}
                     <span className="result-source">via {track.source}</span>
+
+                    {/* Positive badge when successfully mapped
+                        the result to a real Spotify ID. */}
                     {track.matched && (
                       <span className="result-badge matched">✅ Matched</span>
                     )}
+
+                    {/* Warning badge when the track may not work. */}
                     {track.needsSpotifyId && (
                       <span className="result-badge warning">
                         ⚠️ May not work
                       </span>
                     )}
                   </div>
+
+                  {/* Add button. Disabled when the track
+                      cannot be resolved to a Spotify ID — this
+                      prevents the user from adding a track that
+                      will later fail to generate recommendations. */}
                   <button
                     className="btn btn-success btn-small"
                     onClick={() => addTrackFromSearch(track)}
@@ -329,7 +447,10 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
         </div>
       )}
 
-      {/* Seed Tracks List */}
+      {/* ---- Seed track tags ---- */}
+      {/* Each seed track is rendered as a small pill/tag with an
+          index number, the title (and artist when known), a source
+          label and a ✕ button to remove it. */}
       <div className="seed-tracks-list">
         {seedTracks.map((track, index) => (
           <div key={track.id + index} className="seed-track-tag">
@@ -348,6 +469,8 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
             </span>
           </div>
         ))}
+
+        {/* Empty state — shown when no seed tracks exist yet. */}
         {seedTracks.length === 0 && (
           <span style={{ color: "#666688", fontSize: "0.9rem" }}>
             No seed tracks added yet. Search for a song above!
@@ -358,4 +481,5 @@ function TrackInput({ seedTracks, setSeedTracks, apiStatus }) {
   );
 }
 
+// Export the component so App.js can render it.
 export default TrackInput;

@@ -1,25 +1,49 @@
 // src/services/reccobeats.js
+//
+// All communication with the ReccoBeats API (audio-feature/track database +
+// recommendation engine, no auth required). This file has a real debugging
+// history worth knowing before changing it further:
+//
+// - ReccoBeats track objects carry NO genre field at all (confirmed by
+//   inspecting raw API responses) - only trackTitle, artists, durationMs,
+//   isrc, href, popularity. Genre-aware matching is not possible against
+//   this API alone; see lastfm.js's getTrackInfo() for a real (but unused)
+//   genre/tag source.
+// - getRecommendations() below has been directly verified (via curl,
+//   bypassing this codebase entirely) to return different, often
+//   genre-unrelated results for the SAME seed IDs on repeated calls. Both
+//   comma-joined (`seeds=a,b`) and repeated-key (`seeds=a&seeds=b`) formats
+//   were tested and behave the same way - this is not a request-format bug,
+//   it looks like an inherent limitation of ReccoBeats' free recommendation
+//   endpoint (pure audio-feature nearest-neighbour, no genre awareness).
+// - getTrackById() below returns HARDCODED placeholder audio features
+//   (energy: 0.5, valence: 0.5, tempo: 120, ...) instead of calling
+//   ReccoBeats' real GET /v1/track/:id/audio-features endpoint. Anything
+//   depending on real feature values (e.g. services/similarity.js, if it's
+//   ever wired in) will see identical fake numbers for every track until
+//   this is fixed.
 
-// Import axios for making HTTP requests to the ReccoBeats API.
 const axios = require("axios");
 
-// ReccoBeats' public API base URL. All endpoints are appended to this.
+// ReccoBeats API base URL. All endpoints are appended to this.
 const BASE_URL = "https://api.reccobeats.com";
 
 /**
  * extractSpotifyId
  * ------------------------------------------------------------
- * Normalise a Spotify identifier from various formats into a bare
- * 22-character base62 Spotify track ID.
+ * Extract a clean 22-character Spotify track ID from a URI, URL,
+ * or already-clean ID.
  *
  * Handles:
- *   - Spotify URIs       (spotify:track:XXXXXXXX)
- *   - Spotify share URLs (open.spotify.com/track/XXXXXXXX)
+ *   - Spotify URIs       ("spotify:track:XXXXX")
+ *   - Spotify share URLs (open.spotify.com/track/XXXXX)
  *   - Bare 22-char IDs   (already the desired format)
  *
- * Any input that doesn't match one of those formats is returned
- * unchanged — this lets free-text queries (e.g., "Steve Aoki") pass
- * through without being mangled.
+ * Unrecognised input is returned unchanged, so callers always get
+ * a string back even if it isn't a valid Spotify ID.
+ *
+ * @param {string} input - Spotify URI, URL, or raw ID
+ * @returns {string|null} Clean Spotify track ID, or null if input was falsy
  */
 function extractSpotifyId(input) {
   if (!input) return null;
@@ -40,26 +64,28 @@ function extractSpotifyId(input) {
     return input;
   }
 
-  // Case 4: unrecognised format — return unchanged.
+  // Case 4: unrecognised format - return unchanged.
   return input;
 }
 
 /**
  * spotifyIdFromHref
  * ------------------------------------------------------------
- * Extract the real, playable Spotify track ID from a ReccoBeats
- * `href` field. ReccoBeats responses embed the canonical Spotify
- * link in this field — it is the ONLY reliable place to get a
- * playable Spotify ID from a ReccoBeats response, because ReccoBeats'
- * own track IDs are internal UUIDs that the Spotify embed cannot use.
+ * Extract a real Spotify track ID from a ReccoBeats `href` field.
  *
  * Example:
  *   "https://open.spotify.com/track/00aqkszH1FdUiJJWvX6iEl"
- *   → "00aqkszH1FdUiJJWvX6iEl"
+ *   -> "00aqkszH1FdUiJJWvX6iEl"
+ *
+ * The `href` field is the ONLY reliable place to get a playable
+ * Spotify ID from a ReccoBeats response - ReccoBeats' own internal
+ * IDs are not usable by the Spotify embed.
+ *
+ * @param {string} href - A ReccoBeats `href` field value
+ * @returns {string|null} The extracted 22-char Spotify ID, or null
  */
 function spotifyIdFromHref(href) {
   if (!href) return null;
-  // Match exactly 22 base62 characters after "track/".
   const match = href.match(/track\/([a-zA-Z0-9]{22})/);
   return match ? match[1] : null;
 }
@@ -67,30 +93,35 @@ function spotifyIdFromHref(href) {
 /**
  * getTrackById
  * ------------------------------------------------------------
- * Fetch a single track's details by ID. Primarily used by the
- * /api/track/:id route.
+ * Fetch a track's details from ReccoBeats by ID (used by track.js).
+ * This replaces the removed fetchTrackFeatures.
+ *
+ * WARNING: see the file-level note - the returned audio feature
+ * values (energy, valence, tempo, etc.) are HARDCODED placeholders,
+ * not real features from ReccoBeats. Any consumer relying on real
+ * feature values will see identical numbers for every track until
+ * this is wired up to ReccoBeats' /v1/track/:id/audio-features
+ * endpoint.
  *
  * Resolution strategy:
  *   1. Normalise the ID and look it up via ReccoBeats search.
  *   2. If not found, fall back to the local sample dataset.
  *
- * The ReccoBeats search endpoint does NOT return audio features
- * (energy, valence, etc.), so this function supplies sensible
- * defaults for those fields to keep the response shape stable
- * for callers.
+ * @param {string} trackId - Spotify ID, Spotify URI/URL, or ReccoBeats ID
+ * @returns {Promise<Object|null>} Track details (with fake audio features) or null if not found anywhere
  */
 async function getTrackById(trackId) {
   try {
     console.log(`🔍 Fetching track from ReccoBeats: ${trackId}`);
 
-    // Normalise the incoming ID, then search ReccoBeats for it.
+    // Normalise the ID, then look it up in ReccoBeats.
     const cleanId = extractSpotifyId(trackId);
     const searchResult = await searchTrack(cleanId || trackId);
 
     if (searchResult) {
-      // Build a full track record with default audio features.
-      // The search endpoint doesn't provide these, then use
-      // neutral mid-range defaults rather than leaving them null.
+      // Build a full track record with placeholder audio features.
+      // The search endpoint doesn't return real features, so these
+      // are hardcoded defaults (see WARNING above).
       return {
         id: searchResult.reccobeatsId,
         spotifyId: searchResult.spotifyId,
@@ -109,7 +140,7 @@ async function getTrackById(trackId) {
       };
     }
 
-    // Fallback: check the local sample dataset.
+    // If not found in ReccoBeats, check the local sample dataset.
     const sampleTracks = require("../data/sampleTracks.json");
     if (sampleTracks[trackId] || sampleTracks[cleanId]) {
       const track = sampleTracks[trackId] || sampleTracks[cleanId];
@@ -127,20 +158,22 @@ async function getTrackById(trackId) {
 /**
  * searchTrack
  * ------------------------------------------------------------
- * Look up a track in ReccoBeats by its Spotify ID.
+ * Look up a specific track in ReccoBeats by its Spotify ID,
+ * verifying the match is genuine.
  *
- * IMPORTANT IMPLEMENTATION NOTE:
- * `/v1/track/search` is a FUZZY TEXT search endpoint, not an
- * exact-ID lookup. Passing a raw Spotify ID as `searchText` used to
- * be trusted blindly, which let ReccoBeats' fuzzy matcher return a
+ * IMPORTANT: /v1/track/search is a FUZZY TEXT search endpoint.
+ * Passing a raw Spotify ID as `searchText` used to be trusted
+ * blindly, which let ReccoBeats' fuzzy matcher return a
  * completely unrelated track (matched on stray characters in the
- * ID) while keep labelling it with the ORIGINAL spotifyId. That
- * is how a track's title/artist could end up attached to the wrong
- * Spotify ID in earlier versions.
+ * ID) while the original spotifyId was still being used as the
+ * label. That's how a track's title/artist could end up attached
+ * to the wrong Spotify ID in earlier versions.
  *
- * To prevent this, it now verifies that the returned result's own
- * `href` actually contains the Spotify ID that was asked for. Only
- * exact matches are accepted.
+ * The fix verifies that the result's own `href` actually contains
+ * the ID being searched for. Only exact matches are accepted.
+ *
+ * @param {string} spotifyId - Clean 22-character Spotify track ID
+ * @returns {Promise<Object|null>} {reccobeatsId, title, artist, spotifyId} or null if no verified match found
  */
 async function searchTrack(spotifyId) {
   try {
@@ -149,7 +182,9 @@ async function searchTrack(spotifyId) {
     const response = await axios.get(`${BASE_URL}/v1/track/search`, {
       params: {
         searchText: spotifyId,
-        limit: 5, // fetch several so an exact match can be picked
+        // Fetch several results so the one that exactly matches the
+        // requested ID can be picked out.
+        limit: 5,
       },
       timeout: 10000,
       headers: {
@@ -162,8 +197,9 @@ async function searchTrack(spotifyId) {
       response.data.content &&
       response.data.content.length > 0
     ) {
-      // Find a result whose own Spotify href matches the requested ID.
-      // This is the crucial validation step that prevents mismatches.
+      // Look for a result whose own Spotify href actually matches
+      // the ID being searched for. This is the crucial validation
+      // step that prevents the fuzzy-mismatch bug described above.
       const match = response.data.content.find(
         (track) => spotifyIdFromHref(track.href) === spotifyId,
       );
@@ -180,8 +216,8 @@ async function searchTrack(spotifyId) {
         reccobeatsId: match.id,
         title: match.trackTitle,
         artist: match.artists?.[0]?.name || "Unknown Artist",
-        // Prefer the ID from the href (it's the source of truth for the
-        // Spotify ID); fall back to the requested ID if extraction failed.
+        // Prefer the ID from the href (source of truth); fall back to
+        // the requested ID if extraction failed.
         spotifyId: spotifyIdFromHref(match.href) || spotifyId,
       };
     }
@@ -202,10 +238,18 @@ async function searchTrack(spotifyId) {
  * Fetch a list of recommended tracks from ReccoBeats, seeded by a
  * set of ReccoBeats IDs.
  *
- * @param {Array<string>} reccobeatsIds - Seed IDs (ReccoBeats UUIDs)
- * @param {number}        size          - Number of recommendations
- * @param {Object}        filters       - Optional audio feature filters
- * @returns {Array}       Normalised recommendation objects
+ * WARNING: see the file-level note - this endpoint has been
+ * observed to return different, often genre-unrelated results for
+ * identical seeds across repeated calls. Treat its output as
+ * "audio-feature-adjacent, not genre-reliable" rather than
+ * assuming consistency.
+ *
+ * @param {Array<string>} reccobeatsIds - ReccoBeats track IDs to use as seeds
+ * @param {number} [size=10] - Desired result count (capped at 100)
+ * @param {Object} [filters={}] - Optional audio-feature filters (energy, valence, popularity).
+ *                                Note: currently these are always undefined in practice - the
+ *                                routes only pass through mood/genre/discovery, never these.
+ * @returns {Promise<Array<Object>>} Recommended tracks (with spotifyId from href), or [] on failure
  */
 async function getRecommendations(reccobeatsIds, size = 10, filters = {}) {
   try {
@@ -219,11 +263,9 @@ async function getRecommendations(reccobeatsIds, size = 10, filters = {}) {
       `🎵 Getting recommendations from ReccoBeats for IDs: ${reccobeatsIds.join(", ")}`,
     );
 
-    // Build the query parameters. `size` is capped at 100 (ReccoBeats'
-    // documented maximum) and any extra filters (energy, valence,
-    // popularity) are spread in as additional query params.
     const params = {
       seeds: reccobeatsIds.join(","),
+      // ReccoBeats caps `size` at 100.
       size: Math.min(size, 100),
       ...filters,
     };
@@ -242,10 +284,10 @@ async function getRecommendations(reccobeatsIds, size = 10, filters = {}) {
       );
       return response.data.content.map((item) => ({
         id: item.id,
-        // The real, playable Spotify ID - extracted from href.
-        // This used to be dropped entirely, so every recommended track
-        // fell back to ReccoBeats' internal UUID as its "id", which the
-        // Spotify player can't use.
+        // The real, playable Spotify ID - extracted from href. This
+        // used to be dropped entirely, so every recommended track
+        // fell back to ReccoBeats' internal UUID as its "id",
+        // which the Spotify player can't use.
         spotifyId: spotifyIdFromHref(item.href),
         title: item.trackTitle,
         artist: item.artists?.[0]?.name || "Unknown Artist",
@@ -267,8 +309,16 @@ async function getRecommendations(reccobeatsIds, size = 10, filters = {}) {
 /**
  * searchTracksByText
  * ------------------------------------------------------------
- * Perform a free-text search against ReccoBeats (e.g., "Steve Aoki"
- * or "Bohemian Rhapsody Queen").
+ * Perform a raw free-text search against ReccoBeats.
+ *
+ * This is the low-level primitive. Prefer searchTracksByTextSmart()
+ * or searchTrackByTitleAndArtist() in new code, since this function
+ * alone is known to fuzzy-match poorly on combined "Artist - Title"
+ * strings.
+ *
+ * @param {string} query - Free-text search query (e.g., "Steve Aoki")
+ * @param {number} [limit=10] - Max results
+ * @returns {Promise<Array<Object>>} Matching tracks (with spotifyId), or [] on failure/no results
  */
 async function searchTracksByText(query, limit = 10) {
   try {
@@ -295,9 +345,9 @@ async function searchTracksByText(query, limit = 10) {
       );
       return response.data.content.map((track) => ({
         id: track.id,
-        // Real, playable Spotify ID extracted from href.
-        // This was missing entirely before, which meant search results
-        // could not be played and were often unusable as seeds.
+        // Real, playable Spotify ID extracted from href. This was
+        // missing entirely in an earlier version, which meant search
+        // results could not be played and were often unusable as seeds.
         spotifyId: spotifyIdFromHref(track.href),
         title: track.trackTitle,
         artist: track.artists?.[0]?.name || "Unknown Artist",
@@ -320,74 +370,147 @@ async function searchTracksByText(query, limit = 10) {
 /**
  * searchTracksByTextSmart
  * ------------------------------------------------------------
- * Wrapper around searchTracksByText that retries with a simplified
- * query when the first attempt returns nothing.
+ * Search ReccoBeats by text, using cross-validation to avoid
+ * blindly trusting generic or unrelated fuzzy matches.
  *
- * CONFIRMED VIA TESTING:
- * ReccoBeats' fuzzy matcher can fail on a combined "Artist - Title"
- * or "Artist Title" query even when the bare title alone matches
- * immediately. For example:
- *   - "Foo Fighters Everlong"     → 0 results
- *   - "Foo Fighters - Everlong"   → 0 results
- *   - "Everlong"                  → correct Foo Fighters track as #1
+ * Background from direct testing:
+ * ReccoBeats' fuzzy matcher can fail on a combined
+ * "Artist - Title" / "Artist Title" query even when the bare title
+ * alone matches immediately - e.g. "Foo Fighters Everlong" and
+ * "Foo Fighters - Everlong" both returned zero results, while
+ * "Everlong" alone returned the correct Foo Fighters track as the
+ * #1 hit.
  *
- * When the query contains a common artist/title separator, it splits
- * and try each side alone BEFORE falling back to the combined query.
+ * When a query has a separator (e.g. "X - Y"), there is no reliable
+ * way to know whether X or Y is the title vs. the artist - queries
+ * arrive in both orders in practice. An earlier version of this
+ * function guessed "the second segment is probably the title" and
+ * stopped at the first segment that returned ANY result - but a
+ * bare artist name (e.g. just "Nirvana") almost always returns
+ * something, so that guess could lock onto a generic, unrelated
+ * result set before ever trying the actual title. (Confirmed:
+ * searching "Smells Like Teen Spirit - Nirvana" stopped at
+ * "Nirvana" alone and never tried the song title at all.)
+ *
+ * Fix: both segments are searched, then cross-validated - a
+ * candidate only counts as a real match if the OTHER segment's text
+ * actually appears in that candidate's title or artist. This works
+ * regardless of which order the title/artist were typed in, and
+ * avoids trusting a lucky-but-irrelevant hit from either segment
+ * alone.
+ *
+ * @param {string} query - Free-text query, optionally containing an "Artist - Title" separator
+ * @param {number} [limit=10] - Max results
+ * @returns {Promise<Array<Object>>} Matching tracks (with `verified` flag), or [] if nothing found
  */
 async function searchTracksByTextSmart(query, limit = 10) {
-  // Common artist/title separators found in real search input.
   const separators = [" - ", " – ", " — ", " + ", " | "];
   const matchedSep = separators.find((sep) => query.includes(sep));
 
   if (matchedSep) {
-    // Split on the separator, trim and drop empty entries.
     const parts = query
       .split(matchedSep)
       .map((p) => p.trim())
       .filter(Boolean);
 
-    // Try each segment ALONE — and in REVERSE order, because titles
-    // are typically the second element ("Artist - Title") and titles
-    // are the more distinctive search term.
-    //
-    // Why this order matters:
-    //   - Combined "Artist - Title" strings frequently return ZERO
-    //     results ("Foo Fighters - Everlong").
-    //   - Or worse, they return a wrong/unrelated artist matched
-    //     on stray words ("Nirvana - Smells Like Teen Spirit" once
-    //     matched an artist called "Michael Pan").
-    // Searching the bare title alone avoided both problems in testing,
-    // so it's tried FIRST rather than as a last resort.
-    for (const part of [...parts].reverse()) {
-      if (!part) continue;
+    // Cross-validation only makes sense with exactly two halves -
+    // e.g. "Title - Artist". Three or more segments are ambiguous.
+    if (parts.length === 2) {
+      const [partA, partB] = parts;
       console.log(
-        `🔍 Trying simplified query first: "${part}" (from "${query}")`,
+        `🔍 Searching both segments of "${query}": "${partA}" and "${partB}"`,
       );
-      const results = await searchTracksByText(part, limit);
-      if (results && results.length > 0) return results;
+
+      // Search both halves in parallel for speed.
+      const [resultsA, resultsB] = await Promise.all([
+        searchTracksByText(partA, Math.max(limit, 5)),
+        searchTracksByText(partB, Math.max(limit, 5)),
+      ]);
+
+      // Strip apostrophes/quotes/punctuation before comparing - e.g.
+      // the real title "Summer of '69" would never match a plain
+      // substring check against the typed query "Summer of 69" (the
+      // apostrophe sits right in the middle of the digits), even
+      // though they clearly refer to the same song. Normalising both
+      // sides before comparing avoids this class of false negative.
+      const normalize = (s) =>
+        (s || "")
+          .toLowerCase()
+          .replace(/['’‘"“”]/g, "")
+          .replace(/[^a-z0-9]+/g, " ")
+          .trim();
+
+      const containsText = (candidate, text) => {
+        const haystack = normalize(
+          `${candidate.title || ""} ${candidate.artist || ""}`,
+        );
+        return haystack.includes(normalize(text));
+      };
+
+      // A result from searching partA alone is only trustworthy if
+      // partB's text ALSO shows up in it (and vice versa) - that
+      // confirms the result actually relates to BOTH halves of the
+      // original query, not just one generic/broad segment.
+      const confirmed = [
+        ...(resultsA || []).filter((r) => containsText(r, partB)),
+        ...(resultsB || []).filter((r) => containsText(r, partA)),
+      ];
+
+      if (confirmed.length > 0) {
+        console.log(
+          `✅ Cross-validated match(es) for "${query}" via segment search`,
+        );
+        // Cross-validated against BOTH halves - high confidence.
+        return confirmed.slice(0, limit).map((r) => ({ ...r, verified: true }));
+      }
+
+      // Nothing cross-validated - fall back to whichever segment
+      // actually returned something, but log this clearly since these
+      // are unconfirmed (may be as generic as a bare artist-name search).
+      if (
+        (resultsA && resultsA.length > 0) ||
+        (resultsB && resultsB.length > 0)
+      ) {
+        console.log(
+          `⚠️ No cross-validated match for "${query}" - falling back to unconfirmed segment results`,
+        );
+        return (resultsA && resultsA.length > 0 ? resultsA : resultsB)
+          .slice(0, limit)
+          .map((r) => ({ ...r, verified: false }));
+      }
     }
   }
 
-  // Fall back to the full combined query if no single segment matched.
-  return await searchTracksByText(query, limit);
+  // Fall back to the full combined query if segment search found
+  // nothing at all - this only ever matched the ENTIRE query as one
+  // fuzzy string, so there's no cross-validation to speak of; treat
+  // as unverified.
+  const fallbackResults = await searchTracksByText(query, limit);
+  return (fallbackResults || []).map((r) => ({ ...r, verified: false }));
 }
 
 /**
  * searchTrackByTitleAndArtist
  * ------------------------------------------------------------
  * Look up a track when its title and artist are known separately
- * (as opposed to one free-text string).
+ * (as opposed to one free-text query).
  *
  * Strategy:
- *   1. Search by title alone (via the smart wrapper).
+ *   1. Search by title alone (via the smart wrapper above).
  *   2. Filter the results to find one whose artist actually matches
- *      the artist that were given.
- *   3. Only accept a top result blindly if no artist-matched result
- *      exists — and log a warning when that happens.
+ *      the artist being looked for.
+ *   3. Only fall back to blindly trusting the top result when no
+ *      artist-matched result exists - and log a warning when that
+ *      happens.
  *
- * This explicit artist check prevents the previous behaviour of
+ * This explicit artist check prevents the earlier behaviour of
  * blindly trusting whichever result came back first, which let a
  * wrong artist ("Michael Pan" for a Nirvana search) slip through.
+ *
+ * @param {string} title - Track title to search for
+ * @param {string} [artist] - Artist to validate against; if omitted, top result is trusted as-is
+ * @param {number} [limit=5] - How many candidates to consider when looking for an artist match
+ * @returns {Promise<Object|null>} Best-matching track, or null if nothing found
  */
 async function searchTrackByTitleAndArtist(title, artist, limit = 5) {
   if (!title) return null;
@@ -395,10 +518,10 @@ async function searchTrackByTitleAndArtist(title, artist, limit = 5) {
   const results = await searchTracksByTextSmart(title, limit);
   if (!results || results.length === 0) return null;
 
-  // If an artist was provided, look for a result whose artist matches
-  // (in either direction, so "Nirvana" matches "Nirvana (band)" too).
   if (artist) {
     const artistLower = artist.toLowerCase();
+    // Match in either direction so "Nirvana" matches "Nirvana (band)"
+    // and vice versa.
     const match = results.find(
       (r) =>
         r.artist &&
@@ -406,15 +529,13 @@ async function searchTrackByTitleAndArtist(title, artist, limit = 5) {
           artistLower.includes(r.artist.toLowerCase())),
     );
     if (match) return match;
-
-    // No artist match — warn and fall through to the top result.
     console.warn(
       `⚠️ No ReccoBeats result for "${title}" matched artist "${artist}" - top result was "${results[0].artist}" instead, using it anyway`,
     );
   }
 
-  // Return the best available result when no artist filter was given,
-  // or when nothing matched but still want something back.
+  // Fall back to the top result when no artist filter was given, or
+  // when nothing matched.
   return results[0];
 }
 
